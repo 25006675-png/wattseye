@@ -11,13 +11,13 @@ It focuses on what happens during the live demo.
 The demo should prove the main idea:
 
 ```text
-One sensor can measure total electricity usage, and AI can estimate appliance-level usage.
+A dedicated sensor accurately tracks the AC, a whole-home sensor + AI estimates the rest, and the system can act on what it sees.
 ```
 
 The stronger demo story should also show that WattsEye turns those estimates into useful decisions:
 
 ```text
-Appliance detection -> routine context -> bill forecast -> waste alert -> recommended action
+Hybrid sensing -> appliance detection + AC validation -> routine context -> bill forecast -> waste alert -> live IR cutoff
 ```
 
 The demo should not try to prove every future feature perfectly.
@@ -27,11 +27,11 @@ The demo should not try to prove every future feature perfectly.
 Minimum live demo:
 
 1. Dashboard opens.
-2. Total power is shown.
-3. An appliance turns on.
-4. Total power changes.
-5. Dashboard shows the change.
-6. At least one demo-core appliance is identified or highlighted.
+2. Total power (from main clamp) and AC power (from AC clamp) are both shown.
+3. A general-branch appliance turns on (e.g., kettle). Only main clamp reading rises.
+4. AC-branch appliance turns on (hair dryer in AC SIMULATOR outlet). Both clamps rise. Agreement % between NILM AC estimate and direct AC reading is displayed.
+5. At least one demo-core appliance is identified or highlighted by NILM.
+6. Live AC cutoff: WhatsApp alert → user reply → IR signal → relay opens → AC SIMULATOR outlet goes to zero on both clamps → confirmation message back.
 7. At least one smart insight is shown, such as projected bill, waste score, or energy coach recommendation.
 
 ## 4. Demo-core appliances
@@ -77,24 +77,27 @@ Say:
 
 ```text
 Most people only see their total electricity bill, but they do not know which appliance caused it.
-Smart plugs require one device per appliance. Our system uses one main sensor and AI.
+Smart plugs require one device per appliance — and they can't easily measure hardwired loads like AC.
+Our system uses two clamps inside the DB box plus AI: one dedicated clamp for the AC (the biggest load), one main clamp + AI for everything else.
 ```
 
 ### Part 2 — Show the hardware
 
 Show:
 
-- Demo box
-- CT clamp
+- Demo box (with labeled "AC SIMULATOR" outlet visible)
+- Both CT clamps (main + AC)
 - Raspberry Pi
-- ESP32
+- ESP32 with IR LED
+- IR receiver + relay block on the AC branch
 - Dashboard device
 
 Explain simply:
 
 ```text
-This clamp watches the total electricity flow.
-The Raspberry Pi turns that into data and runs AI.
+This first clamp watches the total electricity flow — that feeds our NILM AI for whole-home breakdown.
+This second clamp wraps the AC's own dedicated wire — it gives us exact AC power directly, no AI needed.
+Together they let our AI run cleaner AND let us prove its accuracy live on the dashboard.
 ```
 
 ### Part 3 — Baseline reading
@@ -126,31 +129,53 @@ Explain:
 The system detects the power pattern and estimates kettle usage.
 ```
 
-### Part 5 — Turn on another appliance
+### Part 5 — Turn on another appliance + show NILM vs direct AC agreement
 
-Turn on lamp or hair dryer.
+Turn on a hair dryer in the AC SIMULATOR outlet (acts as the AC proxy on the dedicated branch).
 
-Show dashboard update.
+Show dashboard update:
+
+- Both clamps now read higher
+- AC card shows: `NILM estimate 1450W | Direct sensor 1500W | Agreement 96.7%`
 
 Explain:
 
 ```text
-The same one sensor sees the combined signal. The AI tries to separate the appliance patterns.
+The hair dryer is on the dedicated AC branch, so both clamps see it.
+Our AI estimates AC consumption from the main signal alone — it says 1450W.
+Our dedicated sensor measures 1500W exactly. Agreement is 96.7%.
+This is live proof that our AI is working — you can watch the percentage update in real time.
 ```
 
-### Part 6 — Show AC empty-room alert
+Then turn on a lamp on the general branch. Only main clamp rises; AC clamp stays at its previous reading. This demonstrates the separation: the AC clamp is specific to its circuit, the NILM clamp sees everything.
 
-This can be simulated or pre-recorded if no real AC is available.
+### Part 6 — Live AC empty-room cutoff (the flagship Pillar 2 moment)
+
+This is now a fully live flow, end to end on stage.
+
+Setup:
+
+- Hair dryer (AC proxy) is still running in the AC SIMULATOR outlet.
+- mmWave sensor has been triggered into "room empty" state (cover the sensor with a sticker or step out of its field).
 
 Flow:
 
 ```text
-AC detected as ON
-Room occupancy = empty
-System sends WhatsApp alert
-User replies YES
-ESP32 sends IR OFF command
+1. mmWave reports: room empty
+2. AC clamp confirms: AC is still drawing 1500W
+3. After short delay, WhatsApp alert arrives on judge's phone:
+   "AC is running in an empty room. Reply Y to turn off. Estimated saving: RM 0.85/hour."
+4. Judge replies "Y"
+5. Pi tells ESP32 via MQTT to fire the IR off command
+6. ESP32 blinks the IR LED (visible LED indicator confirms transmission)
+7. IR receiver on the demo rig detects the signal
+8. Relay opens — power to AC SIMULATOR outlet is cut
+9. Hair dryer audibly stops
+10. Dashboard updates: AC clamp now reads 0W, main clamp drops by 1500W
+11. Confirmation WhatsApp comes back: "AC turned off. Saved approximately RM 0.85 so far."
 ```
+
+This is the moment pure NILM cannot do. The dedicated AC clamp + IR receiver + relay loop is what makes this provably live, not simulated.
 
 ### Part 7 - Show smart insight layer
 
@@ -196,12 +221,14 @@ Be clear internally.
 
 | Feature | Live or simulated? | Notes |
 |---|---|---|
-| Total power sensing | Live | Must work |
+| Total power sensing (Clamp #1) | Live | Must work |
+| Direct AC power sensing (Clamp #2) | Live | Must work |
+| NILM vs Direct AC agreement % | Live | Pillar 1 validation moment |
 | Kettle detection | Live preferred | Demo-core |
-| Lamp/hair dryer detection | Live preferred | Demo-core |
-| AC detection | Can be recorded/simulated | Hard to bring AC |
-| WhatsApp alert | Live or simulated | Depends on Twilio setup |
-| IR AC off | Can be shown with LED or recorded | If no AC available |
+| Lamp / hair dryer detection | Live preferred | Demo-core |
+| AC detection (hair dryer as proxy) | Live | Via dedicated clamp, exact |
+| WhatsApp alert | Live | Twilio sandbox sufficient |
+| IR AC off → relay cutoff | Live | Pillar 2 flagship moment |
 | Fridge anomaly | Simulated/recorded | Better as dashboard story |
 | Bill forecast / waste score | Simulated or based on stored sample data | Good smart-layer proof |
 | Routine-aware insight | Simulated or based on stored sample data | Needs history, so sample data is acceptable |
@@ -220,21 +247,23 @@ This is safer than having the whole demo fail.
 ## 9. Demo script sample
 
 ```text
-This is WattsEye, a one-sensor electricity intelligence system.
-Instead of placing smart plugs on every appliance, we clip one sensor around the main wire.
-The sensor reads total electricity usage.
-Our AI then estimates which appliance is contributing to that total.
+This is WattsEye, a hybrid electricity intelligence system for Malaysian homes.
 
-Now the dashboard shows the baseline usage.
-When I turn on this kettle, the total power jumps.
-The model recognizes this high-power pattern as kettle usage.
+Instead of putting a smart plug on every appliance, we use two clamps inside the DB box.
+The first clamp wraps the main feeder — it sees everything. We use AI (NILM) to break that down into individual appliances.
+The second clamp wraps the AC's dedicated wire — it measures the AC exactly.
 
-This proves our core idea: one sensor can create appliance-level insight.
-The same architecture can scale to around 10 appliance models, including AC, fridge, washer, water heater, and rice cooker.
+Why two clamps? In Malaysia, most ACs sold today are inverter type. Inverter ACs continuously vary their power, which makes them very hard for AI alone to detect reliably. A dedicated clamp solves this. AC is also the biggest single load in a Malaysian home — 30 to 50 percent of the bill — so it's worth measuring exactly.
 
-For Malaysian homes, the AC is especially important. If the AC is running but our mmWave sensor detects nobody in the room, the system can send a WhatsApp alert and even turn it off using infrared control.
+Look at the dashboard. The baseline is around 200 watts.
 
-The smarter layer goes further. It learns routines, forecasts the bill, scores avoidable waste, and recommends the best action. That means WattsEye is not only a monitor. It becomes an energy coach for the home.
+When I turn on this kettle, the total power jumps. Our NILM model recognizes the pattern and labels it as kettle. The AC clamp stays at zero — the kettle isn't on the AC circuit.
+
+Now I plug a hair dryer into the AC SIMULATOR outlet — it represents the AC. Both clamps now rise. And here's the proof our AI is working: NILM estimates 1450 watts, the dedicated sensor measures 1500 watts. We're 96.7 percent in agreement, live on stage.
+
+Now watch this. The mmWave sensor says nobody is in the room, but the AC is still on. The system sends a WhatsApp alert to my phone. I reply Y. The ESP32 fires the IR off command — and the AC simulator cuts off. Dashboard confirms zero. Saved about 85 sen so far.
+
+This is the architecture: one clamp for whole-home coverage, one clamp for the load that matters most. We don't replace smart plugs everywhere — we replace them where it counts, and use AI to fill the rest. Plus a smarter layer that forecasts bills, scores waste, and coaches the user on how to save.
 ```
 
 ## 10. Things not to overclaim

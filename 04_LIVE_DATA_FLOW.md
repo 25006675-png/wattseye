@@ -21,40 +21,51 @@ Visual reference:
 ![WattsEye live data pipeline](assets/live-data-pipeline.svg)
 
 ```text
-CT clamp and voltage sensor
+CT clamp #1 (main) + CT clamp #2 (AC) + voltage sensor
 ↓
-ADS1115 raw readings
+ADS1115 raw readings (A0 = main, A1 = voltage, A2 = AC)
 ↓
-Convert raw readings to current and voltage
+Convert raw readings to current and voltage for each channel
 ↓
-Calculate real power in watts
+Calculate real power in watts:
+  • Total power (from main + voltage)
+  • Direct AC power (from AC clamp + voltage)
 ↓
-Store one reading per second
+Compute residual signal = total power − direct AC power
 ↓
-Build a rolling time window
+Store one reading per second for all three values
+↓
+Build a rolling time window (on the residual signal)
 ↓
 Normalize the input
 ↓
-Feed the window into TFLite models
+Feed the window into TFLite NILM models (kettle, fridge, lamp, etc.)
 ↓
-Get appliance predictions
+Get non-AC appliance predictions
+↓
+Compute NILM-vs-direct AC agreement %
 ↓
 Smooth predictions
 ↓
-Send results to dashboard
+Send results to dashboard: per-appliance breakdown + direct AC + agreement %
+↓
+Store locally first; sync to cloud only when internet is available
 ```
 
 ## 3. Step 1 — Sensor readings
 
-The CT clamp gives current-related signal.
+Two CT clamps give current-related signals:
 
-The voltage sensor gives voltage-related signal.
+- Clamp #1 on the main feeder (input to ADS1115 channel A0)
+- Clamp #2 on the dedicated AC branch (input to ADS1115 channel A2)
 
-These signals are analog.
+The voltage sensor gives a voltage-related signal (input to A1).
+
+All three signals are analog.
 
 The ADS1115 converts them into digital numbers.
 
-The Raspberry Pi reads these numbers.
+The Raspberry Pi reads these numbers from all three channels.
 
 At this point, the numbers are not yet meaningful watts.
 
@@ -76,25 +87,25 @@ This requires calibration.
 
 ## 5. Step 3 — Calculate watts
 
-Once we have current and voltage, we calculate power.
+Once we have currents (from both clamps) and voltage, we calculate two power values per second:
 
 ```text
-Power = Voltage × Current
+Total power     = Voltage × Current_from_Clamp_1  (whole home)
+Direct AC power = Voltage × Current_from_Clamp_2  (AC branch only)
+Residual power  = Total power − Direct AC power   (everything except AC)
 ```
 
 In real AC systems, power calculation can be more complex because voltage and current are waves.
 
 For a prototype, we estimate real-time power using sampled voltage and current values over a short time window.
 
-The goal is to output one useful power value per second.
-
-Example:
+The goal is to output three useful power values per second:
 
 ```text
-Second 1: 230W
-Second 2: 235W
-Second 3: 2250W
-Second 4: 2240W
+Second 1: Total 230W   | AC 0W    | Residual 230W
+Second 2: Total 235W   | AC 0W    | Residual 235W
+Second 3: Total 2250W  | AC 0W    | Residual 2250W  (kettle on general branch)
+Second 4: Total 3700W  | AC 1500W | Residual 2200W  (kettle + AC simulator)
 ```
 
 ## 6. Step 4 — Resample to 1 Hz
@@ -206,15 +217,25 @@ Example dashboard data:
 
 ```json
 {
-  "total_power": 2250,
+  "total_power": 3700,
+  "ac_direct": 1500,
+  "residual_power": 2200,
   "appliances": {
     "kettle": 2000,
     "lamp": 15,
     "fridge": 120,
-    "ac": 0
-  }
+    "ac_nilm_estimate": 1450
+  },
+  "ac_agreement_percent": 96.7
 }
 ```
+
+Notes:
+- `total_power` comes from Clamp #1 (main feeder)
+- `ac_direct` comes from Clamp #2 (dedicated AC clamp)
+- `residual_power` = total minus AC; this is the input NILM disaggregates
+- `ac_nilm_estimate` is the AI's guess from the main signal alone, kept for validation
+- `ac_agreement_percent` = ac_nilm_estimate / ac_direct × 100 — shown live for credibility
 
 The dashboard updates the appliance cards.
 
@@ -224,11 +245,15 @@ History to store:
 
 - Timestamp
 - Total power
+- Direct AC power
+- Residual power
 - Appliance predictions
+- Optional smart plug readings
 - Occupancy state
 - Estimated cost
 - Alerts triggered
 - User responses, if any
+- Sync status, if cloud sync is enabled
 
 This history lets WattsEye learn routines such as normal AC hours, usual kettle time, typical empty-room periods, and normal standby power.
 
@@ -238,21 +263,27 @@ It can output bill forecasts, waste scores, routine-aware alerts, energy coach r
 
 ## 12. Step 10 — Trigger alerts
 
-The same prediction data can trigger alerts.
+The same data can trigger alerts. The dedicated AC clamp makes the AC trigger reliable (no AI uncertainty).
 
 Example:
 
 ```text
-AC model says AC is on.
+Dedicated AC clamp directly shows AC is on (e.g. drawing 1500W).
 mmWave says room is empty.
 This continues for 30 minutes.
 System sends WhatsApp alert.
+User replies YES.
+Pi sends MQTT command to ESP32.
+ESP32 fires IR LED.
+In demo rig: TSOP1838 IR receiver detects signal → relay opens → AC SIMULATOR outlet loses power.
+In real home: AC unit's own IR receiver picks up the signal → AC switches off.
+Dedicated AC clamp confirms 0W. Confirmation WhatsApp sent back.
 ```
 
 Smarter alert example:
 
 ```text
-AC model says AC is on.
+Dedicated AC clamp shows AC is on.
 mmWave says room is empty.
 This continues for 30 minutes.
 The home is usually empty at this time.
@@ -362,7 +393,53 @@ If live ML is unstable, we can still demo honestly by separating parts:
 
 This is acceptable for a prototype if we clearly explain what is live and what is simulated.
 
-## 19. Main takeaway
+## 19. Offline-first storage and sync
+
+Every live reading should be saved locally before any cloud upload is attempted.
+
+Recommended local record shape:
+
+```json
+{
+  "user_id": "local-demo-user",
+  "device_id": "wattseye-pi-001",
+  "timestamp": "2026-05-18T20:30:00+08:00",
+  "total_power_watts": 3700,
+  "ac_power_watts": 1500,
+  "residual_power_watts": 2200,
+  "source": "ct_clamp",
+  "synced": false
+}
+```
+
+Optional smart plug readings can use the same table shape with `source = "smart_plug"` and a smart plug `device_id`.
+
+Cloud sync rule:
+
+```text
+If internet exists and user is logged in:
+  upload unsynced rows to Supabase
+  mark rows as synced locally
+Else:
+  keep rows locally and continue dashboard operation
+```
+
+This supports all three operating modes:
+
+- Best case: local operation plus cloud history sync
+- Normal case: local WiFi dashboard without remote cloud dependency
+- Fallback case: Pi hotspot and local database only
+
+Important UX rule:
+
+```text
+Login tells the app who the user is.
+Connection status tells the app whether the data is live.
+```
+
+If the phone/laptop cannot reach the home Pi, the dashboard should clearly label the readings as synced history, cached history, or demo data. It should not imply that remote cloud data is always live.
+
+## 20. Main takeaway
 
 The live data flow is the bridge:
 

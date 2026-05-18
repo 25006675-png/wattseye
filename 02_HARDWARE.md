@@ -17,10 +17,12 @@ This file is written for beginners.
 
 ### Electricity sensing hardware
 
-- CT clamp sensor, such as SCT-013-030
+- **CT clamp sensor x 2** (such as SCT-013-030)
+  - Clamp #1 — Main feeder (whole-home NILM input)
+  - Clamp #2 — Dedicated AC circuit (direct AC measurement)
 - Voltage sensor module, such as ZMPT101B
-- ADS1115 ADC breakout board
-- Signal conditioning components:
+- ADS1115 ADC breakout board (4 channels — supports both clamps + voltage)
+- Signal conditioning components (one set per CT clamp, so x 2):
   - Burden resistor
   - Voltage divider resistors
   - Capacitor
@@ -30,11 +32,20 @@ This file is written for beginners.
 
 ### Control and occupancy hardware
 
-- ESP32 development board
+- ESP32 development board (for mmWave reading + IR transmit)
 - LD2410 mmWave sensor
-- IR LED
-- NPN transistor, such as 2N2222
+- IR LED (transmits AC off command)
+- NPN transistor, such as 2N2222 (drives IR LED)
 - Resistors for transistor and LED circuit
+
+### AC-cutoff demo block (new for hybrid)
+
+This block lets the IR command actually cut power to the AC simulator on stage. In a real home this is not needed — the real AC unit's own IR receiver responds to the signal.
+
+- IR receiver module (such as TSOP1838)
+- 5V single-channel relay module (opto-isolated, rated for mains switching)
+- NPN transistor + resistors (drives the relay from the IR receiver output)
+- Optional: small MCU (Arduino Nano) if not using the analog receiver-to-relay path
 
 ### Demo rig hardware
 
@@ -42,9 +53,10 @@ This file is written for beginners.
 - Power inlet cable
 - Outlet bank or extension socket
 - Inline fuse
-- Terminal blocks
+- Terminal blocks (with split bus for general branch + AC branch)
 - Live, neutral, and earth wiring
 - Strain relief for cable
+- "AC SIMULATOR" outlet + label tape (so it's clear what the dedicated AC outlet represents)
 
 ## 3. Safety warning
 
@@ -88,13 +100,25 @@ More current means a stronger magnetic field.
 
 ### Where it goes
 
-The CT clamp clips around the main live wire inside the demo box.
+WattsEye uses **two CT clamps**, placed at different points:
 
-It should only go around the live wire, not live and neutral together.
+- **Clamp #1 (Main / NILM)** — wraps around the main live wire just after the inlet fuse. Sees total household current.
+- **Clamp #2 (Dedicated AC)** — wraps around the live wire of the dedicated AC branch (downstream of the terminal block, before the AC outlet). Sees only the AC's current.
 
-### What happens if we remove it
+Each clamp should only go around the live wire, not live and neutral together.
 
-The system cannot measure electricity usage.
+In a real home installation, both clamps go inside the DB box: one on the main feeder, one on the AC circuit breaker output wire. No rewiring of the home is needed because the AC already has its own dedicated wire by code (MS IEC 60364).
+
+### Why two clamps and not one
+
+- The main clamp sees everything combined — needed for whole-home NILM disaggregation.
+- The AC clamp sees only the AC — needed because inverter ACs have no clean NILM signature, so AI alone cannot reliably detect them.
+- Together: subtract the AC clamp reading from the main clamp signal to get a cleaner NILM input for non-AC appliances. Also compare the NILM AC estimate to the direct AC reading to validate the model live.
+
+### What happens if we remove a clamp
+
+- Remove Clamp #1: lose whole-home NILM. Only AC consumption is known.
+- Remove Clamp #2: lose reliable AC detection (especially for inverter ACs), lose the live validation moment, and the live IR cutoff demo cannot be confirmed on the dashboard.
 
 ## 5. Why the CT clamp signal needs conditioning
 
@@ -175,8 +199,10 @@ ADS1115 VDD → Raspberry Pi 3.3V
 ADS1115 GND → Raspberry Pi GND
 ADS1115 SDA → Raspberry Pi GPIO 2
 ADS1115 SCL → Raspberry Pi GPIO 3
-CT clamp conditioned signal → ADS1115 A0
-Voltage sensor output → ADS1115 A1
+Clamp #1 (main feeder) conditioned signal → ADS1115 A0
+Voltage sensor output                      → ADS1115 A1
+Clamp #2 (dedicated AC) conditioned signal → ADS1115 A2
+(ADS1115 A3 reserved for future expansion, e.g. additional dedicated circuit)
 ```
 
 ## 10. ZMPT101B voltage sensor
@@ -257,7 +283,7 @@ This is better for room occupancy.
 
 ### What it does
 
-The IR LED sends infrared light signals like an AC remote.
+The IR LED sends infrared light signals like an AC remote. In a real home, this signal is received directly by the AC unit's built-in IR receiver and switches the AC off (or to standby).
 
 ### Why we need a transistor
 
@@ -267,39 +293,71 @@ The transistor acts like a switch.
 
 The ESP32 controls the transistor, and the transistor allows more current to pass through the IR LED.
 
+## 14a. IR receiver + relay (demo rig only)
+
+### What it does
+
+The demo rig does not include a real AC unit, so the IR LED has nothing to control on its own. To demonstrate the cutoff on stage, we add an IR receiver paired with a relay:
+
+- The TSOP1838 IR receiver detects the 38 kHz IR carrier from the IR LED.
+- Its output triggers a transistor that drives a relay.
+- The relay's mains-side contact is wired in series with the AC-simulator outlet.
+- When the IR signal arrives, the relay opens and cuts power to the AC simulator.
+
+This block is purely for the live demo. In a production install on a real Malaysian home, the existing AC unit handles the IR command directly and the relay block is not needed.
+
+### Two ways to drive the relay
+
+- **Analog path (simpler, recommended)**: TSOP1838 output → transistor → relay coil → relay contact opens. No MCU required. Lower cost (~RM 20 less), fewer failure points. Downside: relay fires on any 38 kHz IR signal — keep the IR LED aimed away during unrelated tests.
+- **MCU path**: TSOP1838 output → Arduino Nano (decodes protocol) → relay. More selective, but more parts.
+
+For the prototype, the analog path is sufficient and lower-risk.
+
 ## 15. Demo box build concept
 
-The demo box simulates a home distribution system.
+The demo box simulates a home distribution system with two branches — one for general appliances and one dedicated to the AC. This mirrors how a real Malaysian DB box is wired (general "power sockets" circuit + dedicated AC circuit).
 
 It should contain:
 
 ```text
-Power inlet
+Power inlet (13A plug)
 ↓
-Fuse
+Inline fuse (10A)
 ↓
-Live wire to outlet bank
+Main CT clamp #1 wraps the live wire here  (whole-home / NILM input)
+↓
+Terminal block (the "mini DB box")
+├──► General branch wire ──► General outlets (kettle, lamp, fan, hair dryer, etc.)
+└──► AC branch wire
+       ↓
+       AC CT clamp #2 wraps the live wire here  (direct AC measurement)
+       ↓
+       Relay contact (controlled by IR receiver)
+       ↓
+       "AC SIMULATOR" outlet  (plug a hair dryer or small heater here as AC proxy)
 ```
-
-The CT clamp wraps around the live wire after the fuse.
 
 The voltage sensor connects across live and neutral after the fuse.
 
 Low-voltage sensor wires go out to the electronics area.
+
+The "AC SIMULATOR" outlet should be physically labeled so judges and teammates understand that this outlet represents the AC circuit in a real home.
 
 ## 16. Hardware testing order
 
 Recommended order:
 
 1. Build low-voltage circuits first without mains power.
-2. Test Raspberry Pi and ADS1115 using simple known signals.
+2. Test Raspberry Pi and ADS1115 using simple known signals (test both clamp channels A0 and A2).
 3. Test ESP32 and mmWave sensor.
-4. Test ESP32 and IR LED with an AC or IR receiver.
-5. Build demo box wiring.
-6. Ask someone qualified to check wiring.
-7. Power on with caution.
-8. Test with one appliance.
-9. Compare measured power with expected appliance rating.
+4. Test ESP32 and IR LED transmit using a phone camera (IR shows up as visible light on most phone cameras).
+5. Test IR receiver + relay block standalone: aim IR LED at TSOP1838, confirm the relay clicks open.
+6. Build demo box wiring with split bus (general branch + AC branch).
+7. Ask someone qualified to check wiring.
+8. Power on with caution.
+9. Test general branch with one appliance — confirm only Clamp #1 sees it.
+10. Test AC branch with one appliance — confirm both Clamp #1 and Clamp #2 see it, and the relay can cut its power on IR command.
+11. Compare measured power with expected appliance rating (calibration).
 
 ## 17. Common beginner mistakes
 

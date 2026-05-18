@@ -8,19 +8,17 @@ The goal is to answer clearly and honestly without overclaiming.
 
 ## 2. Q: Why not just use smart plugs?
 
-Smart plugs need one device per appliance.
+Smart plugs need one device per appliance. That becomes expensive and inconvenient — a 15-appliance home needs 15 plugs.
 
-That becomes expensive and inconvenient.
+They also cannot easily monitor hardwired appliances like AC, water heaters, or built-in ovens.
 
-They also cannot easily monitor hardwired appliances like AC or water heaters.
+WattsEye uses a hybrid sensing architecture: one dedicated CT clamp on the air-conditioner circuit (the biggest single load in a Malaysian home, and the load smart plugs handle worst because most ACs are hardwired or use special sockets) plus one whole-home clamp with AI disaggregation for everything else.
 
-WattsEye uses one main sensor to estimate appliance-level usage across the home.
-
-So our system is designed to be lower-friction and more scalable.
+Two clamps cover what 10–15 smart plugs would, with no per-appliance setup. Users who specifically want per-device tracking on something like a gaming PC can still add an optional smart plug — we treat smart plugs as a complement, not a competitor.
 
 ## 3. Q: How can one sensor detect many appliances?
 
-One sensor reads the total electricity usage.
+The main feeder clamp reads the total electricity usage.
 
 Each appliance creates a different power pattern.
 
@@ -28,10 +26,20 @@ For example:
 
 - Kettle creates a sudden high-power block.
 - Fridge cycles on and off.
-- AC runs in longer cycles.
+- Microwave has short high-power usage.
 - Washing machine has multiple stages.
 
-The AI learns these patterns and estimates which appliances are active inside the total signal.
+The AI learns these patterns and estimates which appliances are active inside the total signal. For the AC specifically, we use a separate dedicated clamp because inverter ACs (Malaysia's dominant type) have no clean signature for NILM to recognize.
+
+## 3a. Q: Why have a second clamp dedicated to AC?
+
+Three reasons:
+
+1. **Inverter ACs are NILM's worst case.** They continuously vary their compressor speed based on temperature feedback, so there is no clean on/off event for the model to detect. Most ACs sold in Malaysia today are inverter type.
+2. **AC is the biggest single load** in a Malaysian home (30–50% of the bill). The appliance worth measuring most accurately is also the one NILM struggles with most — a dedicated sensor solves both problems at once.
+3. **It enables a live cutoff demo** — when the IR system commands the AC off, the dedicated clamp confirms power actually dropped to zero. Pure NILM cannot reliably do this on stage.
+
+The dedicated AC clamp also makes NILM better: by subtracting the known AC reading from the main signal, NILM gets a cleaner input for detecting non-AC appliances.
 
 ## 4. Q: Is the AI always accurate?
 
@@ -48,7 +56,18 @@ Accuracy depends on:
 - Whether appliances overlap
 - Similarity between training homes and real home
 
-We improve reliability by starting with high-confidence appliances and adding calibration/fine-tuning.
+We improve reliability by:
+
+- Starting with high-confidence appliances for the live demo
+- Calibration and fine-tuning with demo rig data
+- Using the dedicated AC clamp to remove the most NILM-hostile load (inverter AC) from the input signal before running disaggregation
+- Showing a live agreement % between NILM's AC estimate and the direct AC reading, so users can see the model's accuracy in real-time on the AC and infer general health from it
+
+## 4a. Q: What does the live agreement % actually prove?
+
+The agreement percentage compares the NILM model's AC estimate with the direct measurement from the dedicated AC clamp. It is direct proof that the AI is working correctly for the AC specifically, and a strong credibility indicator that the same model is working reasonably for other appliances.
+
+It does *not* prove every individual appliance estimate is accurate to the same degree. We are honest about that: it is a live competence indicator, not a per-appliance guarantee.
 
 ## 5. Q: What if two appliances turn on at the same time?
 
@@ -61,6 +80,19 @@ The model may still estimate them if it has seen similar combinations during tra
 But the prediction may be less confident.
 
 That is why we smooth predictions and show likely appliance usage rather than pretending it is always perfect.
+
+## 5a. Q: What if there are two of the same appliance (e.g., two lamps, two kettles, two ACs)?
+
+Honest answer: pure NILM cannot reliably tell two identical appliances apart from one combined load. Two 1500W kettles look the same as one 3000W kettle from the main feeder signal.
+
+How we handle each case:
+
+- **Two identical small/medium appliances** (e.g., two LED lamps, two phone chargers): we report them as combined power for that appliance type. *"Lamps: 30W (2 active)"* is the honest framing, not *"Lamp A: 15W, Lamp B: 15W"*.
+- **Two AC units on the same dedicated breaker**: the AC clamp on that circuit reports their combined power. Cannot be separated, but Pillar 2 ("at least one AC is running in an empty room") still works.
+- **Two AC units on separate breakers** (more common — code-compliant Malaysian wiring puts each AC on its own breaker): one dedicated clamp per AC circuit. The architecture scales linearly — N AC units = N+1 clamps (one main + N AC clamps). Each AC is measured individually.
+- **Two appliances of similar wattage but different type** (e.g., kettle vs hair dryer, both ~1500W resistive): NILM may confuse them based on power magnitude alone. We mitigate using multi-feature classification (duration, harmonics, time-of-day priors).
+
+So the honest answer is: NILM groups appliances by class, not by physical unit. If you want per-unit tracking for two identical appliances, that is where an optional smart plug on one of them makes sense.
 
 ## 6. Q: Why train around 10 models if the demo only focuses on a few?
 
@@ -183,11 +215,15 @@ Safety is a hardware design requirement, not an optional feature.
 
 The system can send IR signals like a normal AC remote.
 
-For the prototype, we may show:
+For the prototype, we demonstrate the complete loop live:
 
 - mmWave detects empty room
-- Dashboard or WhatsApp alert appears
-- ESP32 sends IR command
+- The dedicated AC clamp confirms AC is drawing power
+- WhatsApp alert is sent to the user's phone
+- User replies YES
+- ESP32 fires IR command
+- In the demo rig: TSOP1838 IR receiver detects the signal → relay opens → power to AC SIMULATOR outlet is cut → dedicated AC clamp confirms zero power
+- In a real home: the AC unit's own IR receiver acts on the signal directly (no relay needed)
 
 In a real product, user confirmation and safety settings should be included before automatic control.
 
@@ -246,10 +282,10 @@ The innovation is not just measuring electricity.
 The innovation is combining:
 
 ```text
-One-sensor monitoring + AI appliance disaggregation + routine-aware insights + bill forecasting + energy coaching + occupancy-aware control + early anomaly warning
+Hybrid sensing (dedicated AC + whole-home NILM) + AI appliance disaggregation + routine-aware insights + bill forecasting + energy coaching + occupancy-aware control + verified IR cutoff + early anomaly warning
 ```
 
-This turns raw electricity data into practical decisions.
+The hybrid sensing architecture is the key engineering choice. Pure NILM struggles with inverter ACs (Malaysia's dominant AC type), and pure dedicated-clamp systems can't cover non-AC appliances without a smart plug each. WattsEye combines them: dedicated sensing where it matters (AC), AI disaggregation everywhere else. This turns raw electricity data into practical decisions.
 
 ## 21. Q: What makes the system smart beyond detecting appliances?
 
@@ -388,5 +424,5 @@ The prototype demonstrates the architecture and validates the core idea using se
 ## 26. Best final defense sentence
 
 ```text
-WattsEye is designed to prove that a single main electricity sensor, combined with edge AI and routine-aware insights, can give users appliance-level insight, bill forecasts, waste prevention, energy recommendations, and early abnormality warnings without requiring smart plugs on every appliance.
+WattsEye is designed to prove that a hybrid sensing architecture — one dedicated CT clamp on the air-conditioner circuit plus a whole-home CT clamp with edge AI disaggregation — combined with routine-aware insights and occupancy-driven IR control, can give Malaysian users accurate AC monitoring, appliance-level breakdown, bill forecasts, waste prevention, energy recommendations, and verified live cutoff without requiring smart plugs on every appliance.
 ```
