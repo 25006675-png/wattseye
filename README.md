@@ -11,6 +11,8 @@ Read the files in this order:
 7. `06_DEMO_PLAN.md`
 8. `07_TASK_BREAKDOWN.md`
 9. `08_QA_DEFENSE.md`
+10. `09_COMPONENTS_AND_PRICE_ESTIMATION.md`
+11. `10_LOGIN_CLOUD_AND_SMART_PLUG_TASK.md`
 
 ## Purpose
 
@@ -27,6 +29,16 @@ Hybrid sensing (AC + whole-home) -> appliance detection + AC validation -> occup
 ```
 
 The dashboard should not only show what is using power. It should also forecast bills, detect waste, learn household routines, recommend actions, and warn about abnormal appliance behavior.
+
+The best architecture is **login-first, local-first, with optional cloud sync**:
+
+```text
+Best case:    Login + Internet + cloud -> remote access + synced history
+Normal case:  Login + Home WiFi -> live local smart home monitoring
+Fallback:     Login + Pi hotspot mode -> offline/local dashboard still works
+```
+
+This keeps the core demo reliable. Login is part of the product experience, but cloud sync is optional. If the user is not connected to the home Pi or the latest readings have not synced, the dashboard may show cached, cloud-synced, or demo history instead of live home data. CT sensing, dashboard, MQTT control, and offline storage must still work without internet.
 
 Why two clamps and not one: inverter ACs dominate Malaysian homes and have no clean NILM signature, so AI alone is unreliable for AC. The dedicated clamp solves this and also gives a live "agreement %" between the AI's AC estimate and the direct measurement — a quantified accuracy proof on stage.
 

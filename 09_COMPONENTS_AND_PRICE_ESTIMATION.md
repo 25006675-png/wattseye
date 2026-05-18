@@ -26,6 +26,7 @@ Priority levels:
 - **Necessary — Safety & build**: required because the rig uses mains electricity
 - **Optional — Polish**: improves reliability or presentation but is not required
 - **Optional — Scale**: needed only if expanding past single-AC demo (extra ACs, extra rooms)
+- **Optional — Cloud / smart plug**: improves account history or exact plug-in appliance tracking, but local monitoring must still work without it
 
 ---
 
@@ -144,6 +145,22 @@ We do not need to buy all of these if the team can borrow them.
 | Portable AC / actual AC | 1 | Borrow only | Not practical for live stage — hair dryer serves as proxy | Optional — Scale |
 
 **Subtotal if buying only essential demo appliances (kettle + hair dryer): RM 60–200**
+
+---
+
+## G. Optional cloud and smart plug parts
+
+These are not required for the core hybrid sensing demo. They support remote access, account history, and exact readings for selected plug-in devices.
+
+| Component / service | Qty | Price (RM) | Why we need it | Priority |
+|---|---:|---:|---|---|
+| WiFi smart plug with power monitoring | 1–3 | 25–80 each | Exact reading for selected plug-in appliances | Optional — Cloud / smart plug |
+| Supabase free tier | 1 project | 0 initially | Login, `energy_readings` table, history sync | Optional — Cloud / smart plug |
+| Domain name | 0–1 | 50–80/year | Only for polished remote access | Optional — Polish |
+| Cloud tunnel / reverse proxy service | 0–1 | 0–30/month | Remote access without router port forwarding | Optional — Cloud / smart plug |
+| Extra router / travel router | 0–1 | 60–150 | Demo network fallback if venue WiFi is poor | Optional — Polish |
+
+Recommended first smart plug target: one fridge, fan, lamp, or computer setup. Do not use smart plugs as the required path for AC or the main demo.
 
 ---
 
@@ -288,6 +305,8 @@ To reduce cost, try to borrow:
 - Additional mmWave sensors — for multi-room occupancy detection
 - Additional IR blasters — for multi-room AC control
 - Portable AC unit — only if a real AC is available at the venue with permission
+- Smart plugs with power monitoring — for selected plug-in devices where exact readings are useful
+- Supabase cloud project — for login and remote history sync
 
 ---
 

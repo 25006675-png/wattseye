@@ -22,6 +22,23 @@ WattsEye answers these questions through a dashboard and alerts.
 
 The smarter version should feel like an energy coach, not only a meter.
 
+Connectivity should feel dependable:
+
+```text
+Internet available: user logs in and can view synced history remotely.
+Home WiFi: user logs in and sees live local dashboard data.
+No router/internet: user logs in locally through the Pi hotspot and the system still monitors locally.
+```
+
+The dashboard must always make the data source clear:
+
+```text
+Live from home Pi
+Synced 12 minutes ago
+Cached local history
+Demo/sample data
+```
+
 ## 3. First-time setup concept
 
 In a real product:
@@ -312,6 +329,42 @@ Shows:
 - Normal vs unusual behavior
 - Possible causes
 - Suggested check
+
+### Optional page - Account and sync
+
+Only needed if the cloud layer is enabled.
+
+Shows:
+
+- Login / register / logout
+- Current user email
+- Selected home/device
+- Data source: live local, synced cloud, cached, or demo
+- Cloud sync status
+- Last successful sync time
+- Number of local readings waiting to sync
+
+Cloud status wording should be calm and clear:
+
+```text
+Cloud sync paused. Local monitoring is still running.
+```
+
+Not:
+
+```text
+System offline.
+```
+
+### Optional page - Smart plugs
+
+Shows:
+
+- Paired smart plugs
+- Appliance name assigned to each plug
+- Current plug power
+- Online/offline status
+- Whether the plug reading is used as exact data or validation data
 
 ## 15. Good UX wording
 

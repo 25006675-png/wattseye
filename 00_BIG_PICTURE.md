@@ -75,6 +75,15 @@ WattsEye works similarly:
 
 WattsEye does not try to replace every smart plug. Instead, it focuses on the loads that actually move the bill — air conditioning (exact measurement) plus other major appliances (NILM estimation). A user can still add optional smart plugs later for specific high-interest devices.
 
+Smart plugs are therefore an **optional precision layer**, not the base architecture. They are useful for:
+
+- Validating one appliance during testing
+- Tracking plug-in devices that the user cares about individually
+- Filling gaps where NILM confidence is low
+- Letting the dashboard label a known plug load with exact power
+
+They are not suitable as the only architecture because they cannot cover hardwired loads, require one unit per appliance, and do not solve the AC measurement problem.
+
 ## 7. Three main product pillars
 
 Visual reference:
@@ -224,3 +233,28 @@ WattsEye combines three coverage tiers in one product:
 | Optional | Smart plug integration | Specific high-interest devices the user wants tracked individually | Exact per device |
 
 Each tier covers what it does best. The dedicated AC clamp specifically handles inverter ACs (Malaysia's dominant AC type), which NILM alone is unreliable on.
+
+## 13. Connectivity architecture
+
+The strongest architecture is **login-first, local-first, and cloud-optional**.
+
+```text
+Best case:
+Login + internet + cloud account
+-> remote dashboard access
+-> Supabase history sync
+-> user login across devices
+
+Normal case:
+Login + home WiFi
+-> phone/laptop opens Raspberry Pi dashboard locally
+-> Pi reads sensors, runs AI, stores history, and controls ESP32 through MQTT
+
+Fallback case:
+Login + no router or internet
+-> Raspberry Pi starts hotspot mode
+-> user connects phone/laptop directly to the Pi WiFi
+-> local dashboard, sensing, predictions, alerts inside the local network, and IR cutoff still work
+```
+
+This is a good architecture because the important prototype functions do not depend on the cloud. Login identifies the user and device, while cloud sync improves remote access and long-term history. If the user is away from the home network, they may see the latest synced or cached readings, not necessarily live data from the home. If the cloud layer is unfinished, WattsEye still works as a local smart home monitor after local login.

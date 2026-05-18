@@ -76,6 +76,8 @@ The Raspberry Pi also compares predictions with occupancy, time of day, past rou
 | Flask dashboard | Website shown on user phone/laptop |
 | Twilio | Sends WhatsApp alerts |
 | Local database | Stores historical readings, predictions, occupancy, alerts, and routines |
+| Optional smart plugs | Exact readings for selected plug-in devices |
+| Optional Supabase cloud | Login, remote history sync, and backup storage |
 
 ## 4. Hardware-to-software connection
 
@@ -279,7 +281,81 @@ Output:
 What the user sees and responds to
 ```
 
-## 12. Most important takeaway
+## 12. Network and cloud architecture
+
+WattsEye should be designed as a **login-first, local-first system**:
+
+```text
+User login
+-> choose home/device
+-> determine data source
+   live local Pi if reachable
+   cloud-synced history if remote
+   cached/demo data if nothing live is reachable
+```
+
+The live home loop remains local:
+
+```text
+Raspberry Pi
+-> reads sensors
+-> runs NILM / insight logic
+-> stores local history
+-> serves dashboard on home WiFi or Pi hotspot
+-> controls ESP32 through local MQTT
+```
+
+Cloud services are optional and sit outside the core loop:
+
+```text
+Local database on Pi
+-> offline queue
+-> sync worker, when internet exists
+-> Supabase Auth + energy_readings table
+-> remote dashboard history
+```
+
+Recommended operating modes:
+
+| Mode | Connection | What works |
+|---|---|---|
+| Best case | Login + internet + cloud | Remote access, cloud history sync, local monitoring if Pi is reachable |
+| Normal case | Login + home WiFi | Live local dashboard, MQTT, sensing, AI, alerts inside LAN |
+| Fallback case | Login + Pi hotspot, no internet | Offline dashboard, local storage, AI, ESP32 control |
+| Remote but Pi unavailable | Login + cloud only | Synced/cached history, not guaranteed live home data |
+
+The dashboard should show cloud status separately from device status.
+
+```text
+Device: Online locally
+Cloud sync: Waiting for internet
+Last synced: 10:42 AM
+Data shown: Live local reading
+```
+
+## 13. Smart plug integration point
+
+Smart plugs should connect as an optional data source, not as a replacement for the two CT clamps.
+
+```text
+Smart plug reading
+-> Pi local API / MQTT topic
+-> device_id mapped to appliance name
+-> local database
+-> dashboard exact plug-in reading
+-> optional Supabase sync
+```
+
+Recommended MQTT/API shape:
+
+```text
+Topic: smartplug/{device_id}/power
+Payload: { "power_watts": 82, "energy_wh": 1200, "online": true }
+```
+
+Use smart plugs for selected plug-in appliances where exact measurement is helpful, such as a fridge, fan, lamp, or computer setup. Do not depend on smart plugs for hardwired AC, water heater, or the core demo.
+
+## 14. Most important takeaway
 
 WattsEye is not one single thing.
 

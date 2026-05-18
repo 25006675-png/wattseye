@@ -48,6 +48,8 @@ Compute NILM-vs-direct AC agreement %
 Smooth predictions
 ↓
 Send results to dashboard: per-appliance breakdown + direct AC + agreement %
+↓
+Store locally first; sync to cloud only when internet is available
 ```
 
 ## 3. Step 1 — Sensor readings
@@ -243,11 +245,15 @@ History to store:
 
 - Timestamp
 - Total power
+- Direct AC power
+- Residual power
 - Appliance predictions
+- Optional smart plug readings
 - Occupancy state
 - Estimated cost
 - Alerts triggered
 - User responses, if any
+- Sync status, if cloud sync is enabled
 
 This history lets WattsEye learn routines such as normal AC hours, usual kettle time, typical empty-room periods, and normal standby power.
 
@@ -387,7 +393,53 @@ If live ML is unstable, we can still demo honestly by separating parts:
 
 This is acceptable for a prototype if we clearly explain what is live and what is simulated.
 
-## 19. Main takeaway
+## 19. Offline-first storage and sync
+
+Every live reading should be saved locally before any cloud upload is attempted.
+
+Recommended local record shape:
+
+```json
+{
+  "user_id": "local-demo-user",
+  "device_id": "wattseye-pi-001",
+  "timestamp": "2026-05-18T20:30:00+08:00",
+  "total_power_watts": 3700,
+  "ac_power_watts": 1500,
+  "residual_power_watts": 2200,
+  "source": "ct_clamp",
+  "synced": false
+}
+```
+
+Optional smart plug readings can use the same table shape with `source = "smart_plug"` and a smart plug `device_id`.
+
+Cloud sync rule:
+
+```text
+If internet exists and user is logged in:
+  upload unsynced rows to Supabase
+  mark rows as synced locally
+Else:
+  keep rows locally and continue dashboard operation
+```
+
+This supports all three operating modes:
+
+- Best case: local operation plus cloud history sync
+- Normal case: local WiFi dashboard without remote cloud dependency
+- Fallback case: Pi hotspot and local database only
+
+Important UX rule:
+
+```text
+Login tells the app who the user is.
+Connection status tells the app whether the data is live.
+```
+
+If the phone/laptop cannot reach the home Pi, the dashboard should clearly label the readings as synced history, cached history, or demo data. It should not imply that remote cloud data is always live.
+
+## 20. Main takeaway
 
 The live data flow is the bridge:
 
