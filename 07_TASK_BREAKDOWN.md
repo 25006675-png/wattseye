@@ -23,14 +23,17 @@ The smarter version also needs a cross-cutting smart insight layer. This sits mo
 
 | Task | Priority | Notes |
 |---|---|---|
-| Prepare hardware list | High | Confirm what we already have and what to buy |
-| Build demo box design | High | Must include safety layout |
-| Wire inlet, fuse, outlets | High | Needs supervision |
-| Mount CT clamp | High | Clamp around live wire only |
+| Prepare hardware list | High | Confirm what we already have and what to buy (2 CT clamps now) |
+| Build demo box design with split bus | High | Must include safety layout + general/AC branch separation |
+| Wire inlet, fuse, terminal block split, outlets | High | Needs supervision |
+| Mount CT clamp #1 on main feeder wire | High | Clamp around main live wire only |
+| Mount CT clamp #2 on AC branch wire | High | Wraps the AC branch only (before AC SIMULATOR outlet) |
 | Connect voltage sensor | High | Must be safe and enclosed |
-| Build signal conditioning circuit | High | Needed before ADC reading |
-| Connect ADS1115 to Raspberry Pi | High | I2C connection |
-| Test known appliance readings | High | For calibration |
+| Build signal conditioning circuits (one per clamp) | High | Two parallel paths, A0 and A2 on ADS1115 |
+| Connect ADS1115 to Raspberry Pi | High | I2C connection, use channels A0, A1, A2 |
+| Build IR receiver + relay block | High | Required for live AC cutoff demo |
+| Wire relay contact in series with AC SIMULATOR outlet | High | Mains-rated relay only, supervised |
+| Test known appliance readings on both clamps | High | For calibration; verify split-bus behavior |
 | Prepare hardware diagram | Medium | For teammate explanation and presentation |
 
 ## 4. Raspberry Pi backend tasks
@@ -39,13 +42,14 @@ The smarter version also needs a cross-cutting smart insight layer. This sits mo
 |---|---|---|
 | Install Raspberry Pi OS | High | Basic setup |
 | Enable I2C | High | Needed for ADS1115 |
-| Read ADS1115 values | High | First sensor test |
-| Convert readings to voltage/current | High | Needs calibration formula |
-| Calculate watts | High | Core data output |
-| Store one reading per second | High | Needed for ML rolling window |
+| Read ADS1115 values from A0, A1, A2 | High | First sensor test (main, voltage, AC) |
+| Convert readings to voltage/current per channel | High | Needs calibration formula for each clamp |
+| Calculate watts: total, direct AC, residual | High | Core data output (three values per second) |
+| Compute and log NILM vs direct AC agreement % | High | Powers the live validation dashboard tile |
+| Store one reading per second for all three values | High | Needed for ML rolling window |
 | Store historical predictions and occupancy | High | Needed for routine-aware insights |
 | Load TFLite model | High | For live inference |
-| Run model on rolling window | High | Core AI connection |
+| Run NILM model on residual signal (total − direct AC) | High | Cleaner input → better non-AC disaggregation |
 | Build smart insight engine | High | Routines, forecast, waste score, recommendations |
 | Calculate bill forecast | Medium | Uses cost history and tariff assumption |
 | Calculate waste score | Medium | Summarizes avoidable waste |
@@ -80,16 +84,20 @@ The smarter version also needs a cross-cutting smart insight layer. This sits mo
 | Connect ESP32 to WiFi | High | Needed for MQTT |
 | Publish occupancy to MQTT | High | ESP32 → Pi |
 | Subscribe to AC command topic | High | Pi → ESP32 |
-| Build IR LED transistor circuit | Medium | Needed for AC control |
-| Send test IR signal | Medium | Can test with camera/receiver |
-| Add AC brand remote code | Medium | Depends on demo AC |
+| Build IR LED transistor circuit | High | Needed for AC control |
+| Send test IR signal | High | Confirm with phone camera (IR shows as light) |
+| Build IR receiver + relay circuit (analog path) | High | Needed for live demo cutoff |
+| Confirm end-to-end IR → relay → AC SIMULATOR outlet cutoff | High | Pillar 2 must work |
+| Add AC brand remote code (Daikin/Panasonic/etc.) | Medium | Required for real-home deployment; for demo, any 38kHz signal works |
 
 ## 7. Dashboard/frontend tasks
 
 | Task | Priority | Notes |
 |---|---|---|
 | Build dashboard layout | High | Simple and clean |
-| Show total power | High | Must work live |
+| Show total power (main clamp) | High | Must work live |
+| Show direct AC power (AC clamp) | High | Pillar 1 validation moment |
+| Show NILM vs direct AC agreement % | High | Live proof the AI is working |
 | Show appliance cards | High | Kettle/lamp/hair dryer etc. |
 | Show cost estimate | Medium | Based on tariff assumptions |
 | Show projected bill | High | Key smart insight |
@@ -225,12 +233,17 @@ Suggested priorities:
 
 | Feature | Priority |
 |---|---|
-| Total power sensing | P0 |
-| Dashboard live total power | P0 |
+| Total power sensing (Clamp #1) | P0 |
+| Direct AC power sensing (Clamp #2) | P0 |
+| Dashboard live total + AC power | P0 |
+| NILM vs direct AC agreement % | P0 |
 | Kettle detection | P0/P1 |
 | Second demo appliance detection | P1 |
-| TFLite inference on Pi | P1 |
-| AC empty-room alert | P1/P2 |
+| TFLite inference on Pi (on residual signal) | P1 |
+| mmWave occupancy detection | P1 |
+| IR transmit (ESP32 → IR LED) | P1 |
+| IR receiver + relay live cutoff (demo rig) | P0 |
+| AC empty-room alert | P0 |
 | Bill forecasting | P1 |
 | Routine-aware alert | P1/P2 |
 | Energy coach recommendation | P1/P2 |
@@ -239,7 +252,7 @@ Suggested priorities:
 | Standby power detection | P2 |
 | Full 10 appliance dashboard | P2 |
 | Anomaly detection | P2/P3 |
-| Automatic AC control | P2 |
+| Automatic AC control loop | P1 |
 
 ## 11. Simple weekly plan
 

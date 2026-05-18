@@ -26,17 +26,20 @@ The smarter version should feel like an energy coach, not only a meter.
 
 In a real product:
 
-1. The device is installed near the main electrical panel.
-2. One CT clamp is clipped around the main live wire.
+1. The device is installed inside the home's distribution board (DB box).
+2. Two CT clamps are clipped around two existing wires inside the DB box:
+   - Clamp #1 wraps the main feeder wire (whole-home)
+   - Clamp #2 wraps the dedicated air-conditioner circuit wire
 3. The device connects to WiFi.
 4. The user opens the dashboard on phone or laptop.
-5. The system starts learning and displaying electricity usage.
+5. The system starts learning and displaying electricity usage. Over the first 1–2 weeks, it learns the home's specific routines and AC signature.
 
 For the prototype:
 
 1. We use a demo box instead of a real house DB box.
-2. We plug appliances into the demo box.
-3. The dashboard shows live readings.
+2. The demo box has a split internal bus: one branch for general appliances, one dedicated branch for the AC SIMULATOR outlet.
+3. We plug appliances into the demo box's two zones to show how the two clamps behave differently.
+4. The dashboard shows live readings.
 
 ## 4. Main dashboard screen
 
@@ -56,16 +59,17 @@ The dashboard should show:
 Example:
 
 ```text
-Total Power Now: 2250W
-Today’s Cost: RM 3.20
+Total Power Now: 3700W
+Today's Cost: RM 3.20
 Projected Monthly Bill: RM 96.00
 Waste Score: 81/100
 
 Appliances:
-Kettle: 2000W
-Fridge: 120W
-Lamp: 15W
-AC: 0W
+Kettle: 2000W   (NILM estimate)
+Fridge: 120W   (NILM estimate)
+Lamp:    15W   (NILM estimate)
+AC:    1500W   (Direct measurement)
+         NILM estimate 1450W | Direct 1500W | Agreement 96.7%
 
 Insight:
 Your AC usage is 22% higher than your normal weekday pattern.
@@ -92,6 +96,17 @@ Status: Normal
 Power: 120W
 Pattern: regular cycling
 Health: 92/100
+```
+
+AC card (uses dedicated sensor + NILM comparison):
+
+```text
+Air Conditioner
+Status: ON
+Power: 1500W (Direct sensor)
+AI estimate: 1450W
+Agreement: 96.7%
+Estimated cost: RM 0.85/hour
 ```
 
 ## 6. Smart insight cards
@@ -154,7 +169,7 @@ This should happen quickly enough to feel live.
 ## 9. User flow: AC left on in empty room
 
 ```text
-AC is running
+Dedicated AC clamp directly confirms AC is running (exact, no AI guess)
 ↓
 mmWave sensor detects nobody in room
 ↓
@@ -165,6 +180,8 @@ System sends WhatsApp alert
 User replies YES
 ↓
 System turns off AC using IR signal
+↓
+Dedicated AC clamp confirms zero power → dashboard updates and confirmation WhatsApp is sent
 ```
 
 Example message:

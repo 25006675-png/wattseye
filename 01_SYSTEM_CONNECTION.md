@@ -24,25 +24,31 @@ Visual reference:
 ```text
 Appliance turns on
 ↓
-Main wire current changes
+Main wire current changes (and if AC, the AC branch current also changes)
 ↓
-CT clamp senses the current change
+Two CT clamps sense the current change:
+  • Clamp #1 (main feeder) — sees everything combined
+  • Clamp #2 (AC branch)   — sees only AC
 ↓
-Signal conditioning circuit makes the signal safe and readable
+Signal conditioning circuits (one per clamp) make the signals safe and readable
 ↓
-ADS1115 converts analog signal into digital numbers
+ADS1115 converts analog signals into digital numbers (A0 = main, A1 = voltage, A2 = AC)
 ↓
 Raspberry Pi reads the numbers
 ↓
-Raspberry Pi calculates power in watts
+Raspberry Pi calculates power in watts (total power + direct AC power)
 ↓
-Power readings are stored as a time sequence
+Raspberry Pi subtracts AC reading from main signal → cleaner NILM input
 ↓
-Machine learning models estimate appliance usage
+Power readings + AC reading are stored as a time sequence
 ↓
-Dashboard updates
+NILM models estimate non-AC appliance usage on the residual signal
 ↓
-If needed, WhatsApp alert or AC control is triggered
+Dashboard updates: NILM appliance estimates + direct AC reading + agreement %
+↓
+If needed, WhatsApp alert or IR cutoff is triggered
+↓
+IR signal → real AC unit (in real home) OR → IR receiver + relay (in demo rig)
 ```
 
 Important addition:
@@ -56,14 +62,16 @@ The Raspberry Pi also compares predictions with occupancy, time of day, past rou
 
 | Component | Simple role |
 |---|---|
-| CT clamp | Senses current from the main wire |
-| Signal conditioning circuit | Makes the clamp signal safe for electronics |
+| CT clamp #1 (main feeder) | Senses total household current for NILM |
+| CT clamp #2 (AC branch) | Senses AC current directly (exact, no AI needed) |
+| Signal conditioning circuits | One per clamp — makes clamp signals safe for electronics |
 | ZMPT101B voltage sensor | Measures mains voltage safely |
-| ADS1115 | Converts analog signals into digital numbers |
+| ADS1115 (4-channel) | Converts both clamp signals + voltage into digital numbers |
 | Raspberry Pi | Main brain: reads data, runs AI, serves dashboard |
-| ESP32 | Helper controller: handles occupancy sensor and IR control |
+| ESP32 | Helper controller: handles occupancy sensor and IR transmit |
 | LD2410 mmWave sensor | Detects whether someone is in the room |
 | IR LED + transistor | Sends AC remote-control signal |
+| TSOP1838 IR receiver + relay | Demo rig only — receives IR and cuts power to AC SIMULATOR outlet |
 | MQTT | Device communication system between Pi and ESP32 |
 | Flask dashboard | Website shown on user phone/laptop |
 | Twilio | Sends WhatsApp alerts |
@@ -84,9 +92,9 @@ Smart insight engine gives: forecasts, waste alerts, health warnings, and recomm
 Dashboard gives: user-friendly display
 ```
 
-## 5. Why one sensor can work
+## 5. Why hybrid sensing works
 
-One sensor sees the total usage of the whole system.
+The main clamp sees the total usage of the whole system.
 
 Example:
 
@@ -97,6 +105,12 @@ Kettle turns off: total returns to 200W
 ```
 
 The AI does not need a separate sensor on the kettle. It learns that this kind of sudden 2000W jump looks like a kettle.
+
+The dedicated AC clamp adds one important capability the main clamp alone can't reliably give:
+
+- **Inverter ACs** (dominant in Malaysian homes) have no clean NILM signature — they ramp power continuously based on temperature feedback. The main clamp + AI alone struggles to detect them reliably.
+- The dedicated AC clamp solves this completely: AC is whatever flows through the AC branch wire — no AI inference needed.
+- The AC clamp reading also lets us subtract a known load from the main signal, giving NILM a cleaner input for everything else.
 
 Different appliances create different power patterns:
 
@@ -191,29 +205,30 @@ Step-by-step:
 
 Step-by-step:
 
-1. AC is running.
-2. Power data shows AC-like usage.
-3. mmWave sensor says nobody is in the room.
-4. ESP32 sends occupancy status to Raspberry Pi.
-5. Raspberry Pi decides this may be wasteful.
-6. Raspberry Pi sends WhatsApp alert.
-7. User replies yes.
-8. Raspberry Pi sends MQTT command to ESP32.
-9. ESP32 sends IR OFF signal.
-10. AC turns off.
+1. AC is running. The dedicated AC clamp directly confirms AC is drawing power (no AI guessing needed).
+2. mmWave sensor says nobody is in the room.
+3. ESP32 sends occupancy status to Raspberry Pi via MQTT.
+4. Raspberry Pi decides this may be wasteful.
+5. Raspberry Pi sends WhatsApp alert with estimated avoidable cost.
+6. User replies YES.
+7. Raspberry Pi sends MQTT command to ESP32.
+8. ESP32 sends IR OFF signal.
+9. In a real home: the AC unit's IR receiver picks up the signal and the AC switches off.
+   In the demo rig: the TSOP1838 IR receiver picks up the signal and triggers the relay to cut power to the AC SIMULATOR outlet.
+10. The dedicated AC clamp confirms zero AC power. Dashboard updates and a confirmation WhatsApp is sent to the user.
 
 ## 11. Where each subsystem begins and ends
 
 ### Electricity sensing subsystem
 
 ```text
-CT clamp + voltage sensor + signal conditioning + ADS1115
+CT clamp #1 (main) + CT clamp #2 (AC branch) + voltage sensor + 2x signal conditioning + ADS1115
 ```
 
 Output:
 
 ```text
-Current and voltage readings
+Total current/voltage + direct AC current readings
 ```
 
 ### AI subsystem
@@ -231,13 +246,13 @@ Predicted appliance usage
 ### Control subsystem
 
 ```text
-mmWave sensor + ESP32 + MQTT + IR LED
+mmWave sensor + ESP32 + MQTT + IR LED  →  (real AC OR demo rig IR receiver + relay)
 ```
 
 Output:
 
 ```text
-Occupancy status and AC control
+Occupancy status, AC IR command, and verified power cutoff on the AC branch
 ```
 
 ### Smart insight subsystem
@@ -279,5 +294,5 @@ If one part is missing, the system becomes weaker.
 But the most important proof is:
 
 ```text
-Can one sensor produce useful appliance-level insight?
+Can hybrid sensing (one dedicated clamp + one NILM clamp) produce reliable AC measurement AND useful appliance-level insight for everything else?
 ```

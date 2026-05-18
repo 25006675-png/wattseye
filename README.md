@@ -18,15 +18,17 @@ This folder explains WattsEye in a beginner-friendly but detailed way so teammat
 
 ## Main idea
 
-WattsEye uses one electricity sensor to monitor total power usage, then uses AI to estimate appliance-level usage and show insights on a dashboard.
+WattsEye uses a hybrid sensing architecture — one dedicated CT clamp on the air-conditioner circuit (exact AC measurement) plus a whole-home CT clamp with AI disaggregation (everything else) — then shows insights on a dashboard.
 
 The smarter product vision is:
 
 ```text
-Power sensing -> appliance detection -> occupancy and routine context -> smart insights
+Hybrid sensing (AC + whole-home) -> appliance detection + AC validation -> occupancy and routine context -> smart insights -> verified IR cutoff
 ```
 
 The dashboard should not only show what is using power. It should also forecast bills, detect waste, learn household routines, recommend actions, and warn about abnormal appliance behavior.
+
+Why two clamps and not one: inverter ACs dominate Malaysian homes and have no clean NILM signature, so AI alone is unreliable for AC. The dedicated clamp solves this and also gives a live "agreement %" between the AI's AC estimate and the direct measurement — a quantified accuracy proof on stage.
 
 ## Visual diagrams
 

@@ -28,6 +28,8 @@ Non-intrusive means we do not put a sensor on every appliance.
 
 Instead, we monitor the whole home from one main point.
 
+In WattsEye, NILM runs on the main feeder clamp's signal. The dedicated AC clamp does **not** run NILM — it just measures AC power directly. The two work together: the dedicated AC reading is also used to clean up the NILM input (subtraction) and to validate the model in real-time.
+
 ## 3. What the model receives
 
 The model receives a time sequence of total power readings.
@@ -373,6 +375,8 @@ Low-power appliances are harder to detect than high-power appliances.
 
 Appliances from different brands may behave differently.
 
+**Inverter air conditioners are NILM's worst case in Malaysia.** Unlike non-inverter ACs that have clean on/off cycles, inverter ACs continuously vary their power based on temperature feedback. This means there is no clean event for the model to detect, no constant power level to recognize, and the signal blends into the background load over time. This is exactly why WattsEye uses a dedicated CT clamp on the AC circuit instead of trying to detect AC purely through NILM.
+
 That is why the prototype should focus live demo on high-confidence appliances first.
 
 Routine-aware detection also has limitations.
@@ -397,12 +401,43 @@ Each appliance has a different electrical signature.
 The model looks at the total power signal and estimates which signatures are present.
 ```
 
-## 23. ML summary
+## 23. How the dedicated AC clamp makes NILM better
+
+The dedicated AC clamp is not just a separate sensor for the AC. It also makes the NILM model better in three ways:
+
+### Use 1 — Signal subtraction for cleaner NILM input
+
+Before running NILM on the main signal, subtract the dedicated AC reading. This removes the loudest and most variable load from the NILM input:
+
+```text
+Main signal       = AC + kettle + fridge + lamp + everything else
+Dedicated AC      = AC only
+Residual (input)  = kettle + fridge + lamp + everything else  ← NILM runs on this
+```
+
+The residual signal is easier for NILM to disaggregate because the most NILM-hostile load (inverter AC) has already been removed.
+
+### Use 2 — Live model validation
+
+The NILM model also estimates AC from the main signal alone. Compare that estimate to the dedicated reading in real-time:
+
+```text
+Agreement % = (NILM AC estimate) / (Direct AC reading) × 100
+```
+
+When agreement is high (>90%), the model's other appliance estimates have higher implied credibility. This is the live "accuracy proof" moment shown on the dashboard.
+
+### Use 3 — Free auto-labeled training data
+
+Every second, we log `(main signal window, dedicated AC reading)`. Over weeks of operation in a real home, this becomes a fully-labeled training set for that specific home's AC, with no manual tagging by the user. Future model fine-tuning can use this dataset.
+
+## 24. ML summary
 
 The ML system does this:
 
 ```text
-Total power sequence → appliance-specific models → estimated appliance usage
+(Main signal − Dedicated AC) → appliance-specific NILM models → estimated non-AC appliance usage
+Dedicated AC reading           → direct AC power (no AI needed)
 ```
 
 The goal is not to make all 10 models perfect for the first prototype.
@@ -410,11 +445,11 @@ The goal is not to make all 10 models perfect for the first prototype.
 The goal is to prove the architecture:
 
 ```text
-One sensor can provide useful appliance-level insight through AI.
+Hybrid sensing + AI gives reliable AC measurement AND useful appliance-level insight for everything else.
 ```
 
 The smarter product goal is:
 
 ```text
-One sensor can help the home understand usage, predict cost, prevent waste, and warn about abnormal behavior.
+Hybrid sensing helps the home understand usage, predict cost, prevent waste, and warn about abnormal behavior.
 ```
