@@ -1,0 +1,20 @@
+timestamp,appliance,power_watts,duration_minutes,occupied,cost_rm
+2026-05-17 07:05,kettle,1800,4,true,0.04
+2026-05-17 07:18,kettle,1760,3,true,0.03
+2026-05-17 08:10,washing_machine,520,55,true,0.28
+2026-05-17 13:20,fridge,115,18,false,0.02
+2026-05-17 20:10,ac,920,130,true,1.28
+2026-05-17 22:40,iron,1100,18,true,0.22
+2026-05-17 23:55,standby,82,360,false,0.18
+2026-05-18 07:12,kettle,1820,4,true,0.04
+2026-05-18 07:36,kettle,1790,3,true,0.03
+2026-05-18 12:45,fridge,120,20,false,0.02
+2026-05-18 19:58,ac,880,145,true,1.31
+2026-05-18 21:30,hair_dryer,1350,8,true,0.12
+2026-05-18 23:50,standby,86,365,false,0.19
+2026-05-19 06:58,kettle,1810,5,true,0.05
+2026-05-19 08:05,washing_machine,540,60,true,0.32
+2026-05-19 13:10,fridge,118,17,false,0.02
+2026-05-19 20:25,ac,910,125,true,1.24
+2026-05-19 22:15,iron,1080,15,true,0.18
+2026-05-19 23:58,standby,84,350,false,0.18

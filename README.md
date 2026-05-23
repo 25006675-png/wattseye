@@ -40,7 +40,7 @@ Fallback:     Login + Pi hotspot mode -> offline/local dashboard still works
 
 This keeps the core demo reliable. Login is part of the product experience, but cloud sync is optional. If the user is not connected to the home Pi or the latest readings have not synced, the dashboard may show cached, cloud-synced, or demo history instead of live home data. CT sensing, dashboard, MQTT control, and offline storage must still work without internet.
 
-Why two clamps and not one: inverter ACs dominate Malaysian homes and have no clean NILM signature, so AI alone is unreliable for AC. The dedicated clamp solves this and also gives a live "agreement %" between the AI's AC estimate and the direct measurement — a quantified accuracy proof on stage.
+Why two clamps and not one: inverter ACs dominate Malaysian homes and have no clean NILM signature, so AI alone is unreliable for AC. The dedicated clamp solves this directly — AC power is whatever flows through the AC branch, no AI inference needed. NILM accuracy for non-AC appliances is validated offline against public datasets, not as a live UI tile.
 
 ## Visual diagrams
 

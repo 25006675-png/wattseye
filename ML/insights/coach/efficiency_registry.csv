@@ -1,0 +1,41 @@
+appliance,size_band,size_label,star_rating,avg_rated_watts,notes
+refrigerator,small,<250L,5,40,Inverter compressor; modern 2-door
+refrigerator,small,<250L,3,75,Mid-range conventional
+refrigerator,small,<250L,1,110,Older non-inverter
+refrigerator,medium,250-400L,5,55,Most common Malaysian household size
+refrigerator,medium,250-400L,3,100,
+refrigerator,medium,250-400L,1,140,
+refrigerator,large,>400L,5,75,Side-by-side or French door
+refrigerator,large,>400L,3,130,
+refrigerator,large,>400L,1,190,
+ac_inverter,1.0HP,~2.6kW cooling,5,347,At CSPF 7.5 (2026 MEPS 5-star threshold)
+ac_inverter,1.0HP,~2.6kW cooling,3,520,Mid-range inverter
+ac_inverter,1.0HP,~2.6kW cooling,2,634,At CSPF 4.1 (2026 MEPS 2-star threshold)
+ac_inverter,1.5HP,~3.5kW cooling,5,467,At CSPF 7.5
+ac_inverter,1.5HP,~3.5kW cooling,3,700,
+ac_inverter,1.5HP,~3.5kW cooling,2,854,At CSPF 4.1
+ac_inverter,2.0HP,~5.0kW cooling,5,714,At CSPF 7.0 (2026 MEPS 5-star threshold for larger units)
+ac_inverter,2.0HP,~5.0kW cooling,3,1000,
+ac_inverter,2.0HP,~5.0kW cooling,2,1250,At CSPF 4.0
+ac_inverter,2.5HP,~6.5kW cooling,5,929,At CSPF 7.0
+ac_inverter,2.5HP,~6.5kW cooling,3,1300,
+ac_inverter,2.5HP,~6.5kW cooling,2,1625,At CSPF 4.0
+water_heater,small,15-30L,5,1800,Storage type; tank insulation matters more than wattage
+water_heater,small,15-30L,3,2800,Lower-insulation storage tank
+water_heater,small,15-30L,1,3500,Old style storage heater
+water_heater,medium,50-80L,5,2200,Family bathroom storage heater
+water_heater,medium,50-80L,3,3000,
+water_heater,medium,50-80L,1,3800,
+water_heater,large,100-150L,5,2800,Multi-bathroom storage
+water_heater,large,100-150L,3,3500,
+water_heater,large,100-150L,1,4500,
+washing_machine,top_load,5-9kg,5,250,Inverter top-load average draw across cycle
+washing_machine,top_load,5-9kg,3,400,Non-inverter standard cycle
+washing_machine,top_load,5-9kg,1,550,Old style top-load
+washing_machine,front_load,7-10kg,5,180,Inverter front-load average draw
+washing_machine,front_load,7-10kg,3,320,Mid-range front-load
+washing_machine,front_load,7-10kg,1,500,Older front-load with heating
+ceiling_fan,standard,40-60inch,5,30,DC inverter ceiling fan
+ceiling_fan,standard,40-60inch,3,55,Mid-efficiency AC motor
+ceiling_fan,standard,40-60inch,1,75,Standard AC induction motor
+
