@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Coach runtime state
+ML/insights/coach/_weather_cache/
+ML/insights/coach/_whatsapp_sent.json
+ML/insights/coach/_user_actions.json
+
+# OS / editor / agent
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/

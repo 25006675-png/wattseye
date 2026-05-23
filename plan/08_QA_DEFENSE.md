@@ -16,6 +16,8 @@ WattsEye uses a hybrid sensing architecture: one dedicated CT clamp on the air-c
 
 Two clamps cover what 10–15 smart plugs would, with no per-appliance setup. Users who specifically want per-device tracking on something like a gaming PC can still add an optional smart plug — we treat smart plugs as a complement, not a competitor.
 
+The stronger framing: smart plugs answer *"how much did this device use?"* for the devices you plugged in. WattsEye answers *"where did my entire bill come from?"*. A home with 10 smart plugs may still be missing 30–40% of its bill (hardwired AC, water heater, lights, anything not behind a plug). WattsEye's main clamp measures the bill exactly by definition — every watt that enters the DB box is counted. NILM and the signature library label as much of that total as possible; anything still unlabeled is shown to the user as a tracked "unknown" bucket until they confirm what it is. With smart plugs, what you don't measure is invisible. With WattsEye, what we don't classify yet is still measured.
+
 ## 3. Q: How can one sensor detect many appliances?
 
 The main feeder clamp reads the total electricity usage.
@@ -61,13 +63,19 @@ We improve reliability by:
 - Starting with high-confidence appliances for the live demo
 - Calibration and fine-tuning with demo rig data
 - Using the dedicated AC clamp to remove the most NILM-hostile load (inverter AC) from the input signal before running disaggregation
-- Showing a live agreement % between NILM's AC estimate and the direct AC reading, so users can see the model's accuracy in real-time on the AC and infer general health from it
+- Reporting NILM accuracy (F1, MAE) offline against public datasets so the numbers we publish are reproducible
 
-## 4a. Q: What does the live agreement % actually prove?
+## 4a. Q: How do you validate NILM accuracy, and why not show it live on the dashboard?
 
-The agreement percentage compares the NILM model's AC estimate with the direct measurement from the dedicated AC clamp. It is direct proof that the AI is working correctly for the AC specifically, and a strong credibility indicator that the same model is working reasonably for other appliances.
+NILM accuracy is reported offline in a validation notebook against UK-DALE and ENERTALK — F1 score for on/off detection, MAE for power estimation. These numbers are stable, reproducible, and comparable to other NILM papers.
 
-It does *not* prove every individual appliance estimate is accurate to the same degree. We are honest about that: it is a live competence indicator, not a per-appliance guarantee.
+We deliberately do **not** show a live "agreement %" tile on the dashboard for three reasons:
+
+1. The dedicated CT clamp is itself a sensor with ±a few percent error. There is no third, more-precise reference on stage to grade either signal against, so a live "agreement %" would be comparing two estimates, not measuring true accuracy.
+2. In the demo rig the AC SIMULATOR outlet is on the same circuit both clamps observe — any agreement reading would largely reflect the wiring topology, not the model.
+3. A naive ratio (NILM / Direct) divides by zero when the AC is off and shows misleading >100% values when NILM overshoots.
+
+The honest framing is: AC is shown as a direct measurement (no AI uncertainty exposed to the user), and NILM accuracy for non-AC appliances is reported in the validation notebook.
 
 ## 5. Q: What if two appliances turn on at the same time?
 
@@ -225,7 +233,27 @@ For the prototype, we demonstrate the complete loop live:
 - In the demo rig: TSOP1838 IR receiver detects the signal → relay opens → power to AC SIMULATOR outlet is cut → dedicated AC clamp confirms zero power
 - In a real home: the AC unit's own IR receiver acts on the signal directly (no relay needed)
 
+Two real-home caveats we are honest about:
+
+1. **IR payload, not just IR carrier.** Inverter ACs (Daikin, Panasonic, Midea, York, etc.) expect a full state frame (mode + setpoint + fan + power bit), not a generic "off" pulse. The demo rig works on any 38 kHz carrier because the TSOP1838+relay only listens for carrier presence. For real-home deployment, the ESP32 must use a per-brand IR library such as `IRremoteESP8266` and either call the brand's `.off()` method or replay a captured frame. This is firmware-only — no new hardware needed.
+2. **Avoid compressor short-cycling.** Repeatedly cutting and restoring power to an inverter AC mid-cycle can damage the compressor. In a real product the "off" command should target the unit's own standby mode via IR, not yank mains power, and minimum off-time guards should be enforced.
+
 In a real product, user confirmation and safety settings should be included before automatic control.
+
+## 15a. Q: How accurate is your power measurement? Is "1500W" really 1500 watts?
+
+Honest answer: for resistive loads (kettle, hair dryer, iron — our demo appliances), yes, within ~2% after calibration. For loads with low power factor (LED lamps, fridge compressor, inverter AC) what we measure is **apparent power** in VA, which can overstate real watts by 10-40%.
+
+Why: the ADS1115 ADC tops out at 860 samples per second total, shared across 3 channels (main current, voltage, AC current). That gives about 250 SPS per channel, or roughly 5 samples per 50 Hz mains cycle. That is enough to compute the RMS magnitudes of voltage and current — but not the phase angle between them, which you need for true real power.
+
+What we do about it:
+
+1. Compute apparent power `S = Vrms × Irms` (in VA) every second from the ADC samples.
+2. Apply a per-appliance power-factor correction at the insight layer using calibration constants in `ML/sensing/power_math.py`. The PF values are measured once during commissioning against a smart plug as ground truth.
+3. The demo deliberately uses resistive appliances where `PF ≈ 1.00`, so apparent power equals real power and the dashboard numbers are accurate live.
+4. For the production version with unknown appliances, the upgrade path is documented in plan 02 §10b: swap to a faster ADC (MCP3008) to compute true real power including PF in software, or use a dedicated energy-metering IC (PZEM-004T or ADE7953) that returns V/I/W/PF/energy directly.
+
+This is more honest than most student projects, which silently report `V × I` without acknowledging the power-factor question at all.
 
 ## 16. Q: What exactly is live in the demo?
 
@@ -251,15 +279,14 @@ We reduce this risk by:
 - Fine-tuning using demo rig data
 - Having backup visualizations
 
-## 18. Q: Why not use a very advanced model like Transformer?
+## 18. Q: Why a Transformer-based NILM model on a Raspberry Pi?
 
-For a prototype, reliability and explainability matter more than model complexity.
+We use the **ELECTRIcity** approach (Sykiotis et al., 2022) — a small Transformer encoder over a 240-sample power window, trained per appliance. Two reasons:
 
-Sequence-to-point CNN is already a known NILM approach.
+1. **Accuracy.** ELECTRIcity reports better F1 and MAE than vanilla sequence-to-point CNNs on UK-DALE and REFIT for the appliances we care about. For a system whose value proposition is "appliance-level breakdown from one feeder clamp," accuracy is worth the extra compute.
+2. **Small model size.** Our checkpoints use d_model = 64 and 2 transformer blocks. Per-model size is well under a megabyte, which is comfortable for a Raspberry Pi 4.
 
-It is lighter and easier to run on Raspberry Pi.
-
-Advanced models can be future work.
+We are honest about the runtime trade-off: a Transformer is heavier than a CNN, so the first thing we do on the Pi is benchmark PyTorch inference (see plan 03 §15). If we miss the 1 Hz live budget, we apply post-training quantization or TorchScript before considering a TFLite rewrite. We chose PyTorch as the runtime because the ELECTRIcity attention layers do not convert cleanly to TFLite without rework, and on-Pi PyTorch inference is fast enough for small Transformers in most cases.
 
 ## 19. Q: How does the system estimate cost?
 
@@ -274,6 +301,28 @@ Energy = Power × Time
 Then it applies electricity tariff assumptions to estimate cost.
 
 For prototype purposes, cost is an estimate, not an official bill.
+
+## 19a. Q: How is RM cost actually calculated? Is it a flat rate?
+
+No. WattsEye implements the full **TNB Regulatory Period 4 (RP4) Domestic tariff** schedule that took effect on 1 July 2025. The calculator lives in `ML/insights/tnb_tariff.py` and includes:
+
+- Generation, Capacity, and Network charges in sen/kWh.
+- The Energy Efficiency Incentive (EEI) tiered rebate (up to 25 sen/kWh for usage <= 200 kWh, scaling down to 0 above 1000 kWh).
+- The Automatic Fuel Adjustment (AFA), TNB's monthly surcharge or rebate that replaced the legacy ICPT under RP4.
+- The RM10/month Retail Charge with its waiver for households at or below 600 kWh/month.
+- The high-band cliff at 1500 kWh/month where the generation charge steps from 27.03 sen to 37.03 sen.
+
+For a typical 350 kWh/month household this gives an effective rate of about 23.43 sen/kWh, not the "RM0.50/kWh flat rate" used by most demo projects.
+
+## 19b. Q: Do you call a TNB API for current tariffs?
+
+No, because TNB does not expose a public consumer-facing tariff API. The myTNB portal has internal APIs but they are authenticated per customer account and intended for users to view their own bills, not for third parties to look up tariff rates.
+
+What WattsEye does instead: hardcode the published RP4 schedule with sources cited in the module docstring, and refresh the AFA constant manually each TNB billing cycle (it changes monthly). This is the same approach the better Malaysian utility apps and solar calculator websites use. We are transparent that the schedule is a maintained constant, not a live feed.
+
+## 19c. Q: What about the Time-of-Use tariff?
+
+Under RP4, TNB introduced an optional ToU plan for households with smart meters: cheaper electricity outside peak hours (peak = 14:00-22:00 weekdays; off-peak = all other hours including weekends). WattsEye runs both the standard and the ToU calculation on the same usage history and reports which would be cheaper for the household's actual routine. Because we already timestamp every reading, the comparison is essentially free, and it gives the user a concrete answer to "should I switch to ToU?" — a question most TNB customers cannot answer without manually crunching their bill.
 
 ## 20. Q: What is the main innovation?
 

@@ -47,11 +47,15 @@ Login should be part of the app experience, but cloud sync and smart plugs shoul
 | Enable I2C | High | Needed for ADS1115 |
 | Read ADS1115 values from A0, A1, A2 | High | First sensor test (main, voltage, AC) |
 | Convert readings to voltage/current per channel | High | Needs calibration formula for each clamp |
-| Calculate watts: total, direct AC, residual | High | Core data output (three values per second) |
-| Compute and log NILM vs direct AC agreement % | High | Powers the live validation dashboard tile |
+| Compute Vrms / Irms from one-second sample buffers | High | Use `ML/sensing/power_math.py:compute_power_reading` |
+| Calibrate clamp scale against a resistive load (kettle) | High | Sets `CalibrationConstants` in power_math; PF≈1.00 for resistive |
+| Measure per-appliance PF for non-resistive loads | Medium | Update `APPLIANCE_POWER_FACTORS` table after testing |
+| Apply PF correction (apparent VA → real W) before dashboard | High | `apparent_to_real_watts(va, appliance)` |
+| Calculate apparent power: total, direct AC, residual | High | Core data output (three VA values per second) |
+| Log NILM AC estimate alongside direct AC reading (internal only) | Medium | For offline validation notebook; not shown on dashboard |
 | Store one reading per second for all three values | High | Needed for ML rolling window |
 | Store historical predictions and occupancy | High | Needed for routine-aware insights |
-| Load TFLite model | High | For live inference |
+| Load PyTorch `.pth` ELECTRIcity models | High | For live inference; see `ML/NILM/test_nilm_inference.py` |
 | Run NILM model on residual signal (total − direct AC) | High | Cleaner input → better non-AC disaggregation |
 | Build smart insight engine | High | Routines, forecast, waste score, recommendations |
 | Calculate bill forecast | Medium | Uses cost history and tariff assumption |
@@ -74,8 +78,9 @@ Login should be part of the app experience, but cloud sync and smart plugs shoul
 | Train other demo-core models | High | Lamp/hair dryer may need own data |
 | Train supplementary models | Medium | AC, fridge, washer, etc. |
 | Evaluate models | High | F1, MAE, SAE |
-| Convert models to TFLite | High | Needed for Pi |
-| Test TFLite inference | High | Check speed and output |
+| Benchmark PyTorch inference on Raspberry Pi 4 | High | Decision point: stay PyTorch vs. quantize vs. convert |
+| Apply post-training quantization or TorchScript if needed | Medium | Only if Pi benchmark misses 1 Hz budget |
+| Convert to ONNX/TFLite (contingency) | Low | Only if quantized PyTorch is still too slow |
 | Build routine-aware detection logic | High | Time/day + occupancy + historical usage |
 | Build appliance health scoring logic | Medium | Compare current behavior with normal pattern |
 | Build standby power detection | Medium | Detect always-on background load |
@@ -94,7 +99,7 @@ Login should be part of the app experience, but cloud sync and smart plugs shoul
 | Send test IR signal | High | Confirm with phone camera (IR shows as light) |
 | Build IR receiver + relay circuit (analog path) | High | Needed for live demo cutoff |
 | Confirm end-to-end IR → relay → AC SIMULATOR outlet cutoff | High | Pillar 2 must work |
-| Add AC brand remote code (Daikin/Panasonic/etc.) | Medium | Required for real-home deployment; for demo, any 38kHz signal works |
+| Add AC brand remote code (Daikin/Panasonic/etc.) via IRremoteESP8266 | **P0 if real-AC demo, P2 otherwise** | Inverter ACs require full state frames, not a generic OFF pulse. Demo rig (TSOP1838+relay) accepts any 38kHz carrier and does not need brand codes. |
 
 ## 7. Dashboard/frontend tasks
 
@@ -103,7 +108,7 @@ Login should be part of the app experience, but cloud sync and smart plugs shoul
 | Build dashboard layout | High | Simple and clean |
 | Show total power (main clamp) | High | Must work live |
 | Show direct AC power (AC clamp) | High | Pillar 1 validation moment |
-| Show NILM vs direct AC agreement % | High | Live proof the AI is working |
+| Surface offline NILM accuracy metrics (F1, MAE) in validation notebook | Medium | Lives in the notebook, not the dashboard |
 | Show appliance cards | High | Kettle/lamp/hair dryer etc. |
 | Show cost estimate | Medium | Based on tariff assumptions |
 | Show projected bill | High | Key smart insight |
@@ -229,7 +234,7 @@ Tasks:
 
 - Train kettle model.
 - Evaluate model.
-- Convert to TFLite.
+- Benchmark inference on the Pi (`test_nilm_inference.py --all`).
 
 ### Stage 4 — Prove live ML
 
@@ -243,7 +248,7 @@ Tasks:
 
 - Create rolling window.
 - Normalize input.
-- Run TFLite model.
+- Run PyTorch model.
 - Smooth prediction.
 - Show appliance card.
 
@@ -298,10 +303,10 @@ Suggested priorities:
 | Total power sensing (Clamp #1) | P0 |
 | Direct AC power sensing (Clamp #2) | P0 |
 | Dashboard live total + AC power | P0 |
-| NILM vs direct AC agreement % | P0 |
+| NILM accuracy notebook (F1, MAE) | P1 |
 | Kettle detection | P0/P1 |
 | Second demo appliance detection | P1 |
-| TFLite inference on Pi (on residual signal) | P1 |
+| PyTorch ELECTRIcity inference on Pi (on residual signal) | P1 |
 | mmWave occupancy detection | P1 |
 | IR transmit (ESP32 → IR LED) | P1 |
 | IR receiver + relay live cutoff (demo rig) | P0 |
@@ -340,7 +345,7 @@ Suggested priorities:
 ### Week 3
 
 - Integrate live data with dashboard.
-- Convert models to TFLite.
+- Benchmark on the Pi; only quantize/convert if needed.
 - Test demo appliances.
 - Add MQTT and alert flow.
 

@@ -103,11 +103,7 @@ AC:     900W   (Direct measurement, exact)
 Lamp:    15W   (NILM estimate)
 ```
 
-Because the AC has a dedicated sensor, the dashboard can show the AI's NILM estimate next to the direct measurement to display real-time accuracy:
-
-```text
-AC: NILM estimate 870W | Direct sensor 900W | Agreement 96.7%
-```
+The dashboard treats the dedicated AC reading as the displayed AC value — no AI uncertainty shown to the user for that load. NILM accuracy for non-AC appliances is validated offline against public datasets (UK-DALE, ENERTALK) using F1 and MAE metrics, not as a live UI tile.
 
 It can also show an event timeline and confidence explanation:
 

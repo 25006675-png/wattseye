@@ -39,15 +39,15 @@ Build a rolling time window (on the residual signal)
 ↓
 Normalize the input
 ↓
-Feed the window into TFLite NILM models (kettle, fridge, lamp, etc.)
+Feed the window into PyTorch ELECTRIcity NILM models (kettle, fridge, hair_dryer, iron, washing_machine)
 ↓
 Get non-AC appliance predictions
 ↓
-Compute NILM-vs-direct AC agreement %
+(Internal only: log NILM AC estimate alongside the direct AC reading for offline validation; not shown on dashboard)
 ↓
 Smooth predictions
 ↓
-Send results to dashboard: per-appliance breakdown + direct AC + agreement %
+Send results to dashboard: per-appliance breakdown + direct AC reading
 ↓
 Store locally first; sync to cloud only when internet is available
 ```
@@ -85,19 +85,35 @@ Voltage sensor reading → mains voltage estimate
 
 This requires calibration.
 
-## 5. Step 3 — Calculate watts
+## 5. Step 3 — Calculate watts (apparent power, with an honest caveat)
 
-Once we have currents (from both clamps) and voltage, we calculate two power values per second:
+The naive textbook formula is `Power = Voltage × Current`. This is correct for direct current, but Malaysian mains is a 50 Hz alternating-current sine wave — voltage swings from +340V to −340V fifty times per second, and current does the same (sometimes phase-shifted). To compute power correctly we need RMS values, not instantaneous samples.
+
+For each one-second buffer of ADS1115 samples we compute:
 
 ```text
-Total power     = Voltage × Current_from_Clamp_1  (whole home)
-Direct AC power = Voltage × Current_from_Clamp_2  (AC branch only)
-Residual power  = Total power − Direct AC power   (everything except AC)
+Vrms              = sqrt( mean( v_sample^2 ) )           over a ~1 s window
+Irms_main         = sqrt( mean( i_main_sample^2 ) )
+Irms_ac           = sqrt( mean( i_ac_sample^2 ) )
+
+Apparent power S  = Vrms × Irms        (units: VA)
 ```
 
-In real AC systems, power calculation can be more complex because voltage and current are waves.
+Apparent power is **what the ADS1115 can give us** at ~250 samples per second per channel. That's only about 5 samples per 50 Hz mains cycle — enough for RMS magnitudes but not enough to compute true real power on its own, because real power also needs the phase angle between voltage and current waves (the power factor φ):
 
-For a prototype, we estimate real-time power using sampled voltage and current values over a short time window.
+```text
+True real power P = Vrms × Irms × cos(φ)     (units: W)
+```
+
+For resistive loads (kettle, hair dryer heating coil, iron, incandescent lamp) `cos(φ) ≈ 1.00`, so `S ≈ P` and the apparent-power reading is the true watt reading within ~2%.
+
+For loads with switching power supplies or motors (LED lamp, fridge compressor, **inverter AC**) `cos(φ)` is 0.6–0.9, so the apparent power overstates real watts by 10-40%. The dashboard inherits that error if we report S as W naively.
+
+How WattsEye handles this honestly:
+
+1. Compute apparent power S from the ADS1115 samples each second.
+2. Apply a **per-appliance power-factor correction** at the insight layer. The correction factors are calibration constants (`ML/sensing/power_math.py`) measured once during commissioning against a smart plug as ground truth. For the demo rig — which uses resistive appliances (kettle, hair dryer, iron) — the correction is ≈1.00, so live numbers are accurate.
+3. Label the values clearly: dashboard tiles read "Power 1500W" but the underlying field is `power_va_or_w` with a `correction_applied` boolean in the JSON.
 
 The goal is to output three useful power values per second:
 
@@ -107,6 +123,8 @@ Second 2: Total 235W   | AC 0W    | Residual 235W
 Second 3: Total 2250W  | AC 0W    | Residual 2250W  (kettle on general branch)
 Second 4: Total 3700W  | AC 1500W | Residual 2200W  (kettle + AC simulator)
 ```
+
+For the production version (real Malaysian home with a real inverter AC and unknown loads), the ADS1115 is the limiting factor. The upgrade path is documented in plan 02 §10b: swap to a faster ADC (MCP3008) to compute true real power in software, or use a dedicated energy-metering IC (PZEM-004T, ADE7953) that returns V, I, W, PF, and energy directly. Neither is needed for the prototype demo.
 
 ## 6. Step 4 — Resample to 1 Hz
 
@@ -132,22 +150,30 @@ The model does not look at only one power value.
 
 It looks at a window of recent power values.
 
-Example window size:
+WattsEye uses ELECTRIcity-style Transformer models trained with a single shared window size across all appliances:
 
 ```text
-599 seconds for kettle or microwave
-1023 seconds for fridge or AC
-2047 seconds for washing machine
+240 samples (≈ 240 seconds at 1 Hz) for all appliances
 ```
+
+This is shorter than the vanilla seq2point CNN defaults (599/1023/2047) because the Transformer's attention layers extract long-range patterns from a smaller window. Using one shared window also lets the Raspberry Pi keep one buffer instead of three.
+
+The actual window size is fixed by the trained models — it can be inspected with:
+
+```text
+state_dict['Generator.position.pe.weight'].shape[0]   # = 240
+```
+
+If the models are retrained with a different window, this number changes and the script's `DEFAULT_WINDOW_SIZE` in `ML/NILM/test_nilm_inference.py` must be updated to match.
 
 A rolling window means the system always keeps the latest readings.
 
 Example:
 
 ```text
-At second 600: use readings 1–599
-At second 601: use readings 2–600
-At second 602: use readings 3–601
+At second 241: use readings 2–241
+At second 242: use readings 3–242
+At second 243: use readings 4–243
 ```
 
 ## 8. Step 6 — Normalize the input
@@ -166,23 +192,23 @@ This is important.
 
 If training data and live data are prepared differently, the model may perform badly.
 
-## 9. Step 7 — Feed into TFLite model
+## 9. Step 7 — Feed into the NILM model
 
-The Raspberry Pi loads the TFLite models.
+The Raspberry Pi loads each PyTorch ELECTRIcity `.pth` checkpoint at startup.
 
-Each model receives the rolling window.
+Each model receives the same rolling window.
 
 Example:
 
 ```text
-kettle_model(input_window) → kettle power estimate
-fridge_model(input_window) → fridge power estimate
-ac_model(input_window) → AC power estimate
+kettle_model(input_window)         → kettle power estimate
+fridge_model(input_window)         → fridge power estimate
+hair_dryer_model(input_window)     → hair dryer power estimate
 ```
 
-If we train around 10 models, the Pi may run multiple models every second.
+The Pi may run several appliance models every second. For the live demo, we prioritize demo-core models first. AC is not in this list — it comes from the dedicated CT clamp, not from a model.
 
-For the live demo, we can prioritize demo-core models first.
+See plan 03 §15 for the runtime path (PyTorch first, quantization/TorchScript if too slow, TFLite only as a contingency).
 
 ## 10. Step 8 — Smooth the prediction
 
@@ -223,19 +249,16 @@ Example dashboard data:
   "appliances": {
     "kettle": 2000,
     "lamp": 15,
-    "fridge": 120,
-    "ac_nilm_estimate": 1450
-  },
-  "ac_agreement_percent": 96.7
+    "fridge": 120
+  }
 }
 ```
 
 Notes:
 - `total_power` comes from Clamp #1 (main feeder)
-- `ac_direct` comes from Clamp #2 (dedicated AC clamp)
+- `ac_direct` comes from Clamp #2 (dedicated AC clamp) — shown as the AC value in the UI
 - `residual_power` = total minus AC; this is the input NILM disaggregates
-- `ac_nilm_estimate` is the AI's guess from the main signal alone, kept for validation
-- `ac_agreement_percent` = ac_nilm_estimate / ac_direct × 100 — shown live for credibility
+- The NILM model's own AC estimate is logged internally for offline validation only, not sent to the dashboard. Treating the dedicated CT clamp as the authoritative AC reading keeps the UI honest and avoids exposing a misleading "agreement %" tile (see plan 03 §23 Use 2)
 
 The dashboard updates the appliance cards.
 
@@ -308,13 +331,30 @@ This helps align sensor output with real power.
 
 ## 14. Demo calibration table
 
-Create a table like this during testing:
+Two error sources stack here and must be calibrated independently:
 
-| Appliance | Expected power | Measured power | Correction needed? |
-|---|---:|---:|---|
-| Kettle | 2000W | 1900W | Yes |
-| Lamp | 15W | 18W | Small error |
-| Hair dryer | 1200W | 1150W | Small error |
+1. **Sensor scale error** — burden resistor tolerance, CT clamp ratio, voltage divider drift. Same per channel regardless of appliance.
+2. **Power factor (PF) gap** — apparent power S = Vrms × Irms overstates real watts by `1 − cos(φ)` for non-resistive loads. Differs per appliance.
+
+Recommended table to fill in during commissioning. Plug each appliance in alone, compare WattsEye's apparent-power reading with a calibrated reference (smart plug or clamp meter):
+
+| Appliance | Type | Expected PF | Rated W | Measured VA | Implied PF | Notes |
+|---|---|---:|---:|---:|---:|---|
+| Kettle | Resistive | 1.00 | 2000 | ~2000 | ≈1.00 | Use this to fix clamp scale |
+| Hair dryer (heat) | Resistive + small motor | 0.95 | 1200 | ~1260 | 0.95 | Demo-core AC proxy |
+| Iron | Resistive | 1.00 | 1000 | ~1000 | ≈1.00 | Clean reference |
+| Incandescent lamp | Resistive | 1.00 | 60 | ~60 | ≈1.00 | Low-power reference |
+| LED lamp | SMPS | 0.65 | 9 | ~14 | 0.64 | Small but illustrative |
+| Fridge (compressor running) | Inductive | 0.70 | 120 | ~170 | 0.71 | If available for testing |
+| Inverter AC | Variable inductive | 0.60–0.95 | 900 | varies | varies | Production-only, not demo |
+
+Procedure:
+
+1. Plug in the kettle (PF ≈ 1.00 by definition) and compare WattsEye's reading to the kettle's rated wattage or a smart plug. Any mismatch is **sensor scale error** — apply a single correction factor to that clamp.
+2. After scale is fixed, plug in each non-resistive appliance and record the implied PF (`measured_VA / rated_W`). Store these in `ML/sensing/power_math.py` as the `APPLIANCE_POWER_FACTORS` table.
+3. At runtime, the insight layer multiplies the apparent-power reading by the appliance's PF before displaying watts and computing RM cost.
+
+For the live demo we focus on resistive appliances (kettle, hair dryer, iron) where PF ≈ 1.00 so the readings are accurate without correction. The PF correction matters more for the production version where unknown appliances need honest watt readings.
 
 ## 15. Why live data may differ from training data
 

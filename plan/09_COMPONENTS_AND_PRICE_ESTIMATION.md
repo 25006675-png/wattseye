@@ -42,7 +42,7 @@ These are needed for the main promise of WattsEye:
 |---|---:|---:|---|---|
 | CT clamp sensor (SCT-013-030) — Main feeder | 1 | 25–60 | NILM input: whole-home current sensing | Necessary — Core sensing |
 | CT clamp sensor (SCT-013-030) — Dedicated AC | 1 | 25–60 | Exact AC measurement on the dedicated AC branch | Necessary — AC hybrid |
-| ZMPT101B voltage sensor module | 1 | 10–25 | Measures mains voltage safely for accurate power (V × I) | Necessary — Core sensing |
+| ZMPT101B voltage sensor module | 1 | 10–25 | Measures mains voltage safely for Vrms-based power math (see plan 02 §10a) | Necessary — Core sensing |
 | ADS1115 ADC module (4-channel) | 1 | 6–25 | Converts both clamps + voltage into digital values | Necessary — Core sensing |
 | Burden resistor (~33Ω) | 2 | 1–5 total | One per CT clamp — converts clamp output current to voltage | Necessary — Core sensing + AC hybrid |
 | 10kΩ resistors (for voltage divider) | 4–10 | 1–5 total | 2 per CT clamp signal path — creates 1.65V midpoint | Necessary — Core sensing + AC hybrid |
@@ -198,7 +198,7 @@ What it cuts:
 - IR receiver + relay block (~RM 25–45)
 - AC SIMULATOR outlet labeling
 
-What we lose: live AC cutoff, live agreement % moment, reliable inverter AC detection. This was the original "pure NILM" plan and we have pivoted away from it. Listed here for reference only.
+What we lose: live AC cutoff, direct AC measurement, reliable inverter AC detection. This was the original "pure NILM" plan and we have pivoted away from it. Listed here for reference only.
 
 > **Cost saving: RM 85–145**
 > **Cost in demo strength: very high — not worth the save**
@@ -380,7 +380,7 @@ For our team, the best strategy is:
 3. Then build the safe demo rig with the split-bus wiring (general branch + AC branch).
 4. Then add NILM inference on the main clamp signal.
 5. Then add the ESP32 + mmWave + IR transmit + IR receiver + relay for the live cutoff demo.
-6. Then polish the dashboard with the agreement % moment and smart insight cards.
+6. Then polish the dashboard with the AC card (direct CT reading) and smart insight cards.
 
 The buying order should follow the build order.
 

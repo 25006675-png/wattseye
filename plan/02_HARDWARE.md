@@ -213,11 +213,13 @@ ZMPT101B is a voltage sensor module.
 
 ### Why we need it
 
-To calculate power, we need voltage and current.
+To calculate power we need both voltage and current. The textbook formula is:
 
 ```text
 Power = Voltage × Current
 ```
+
+That formula is exact for DC. For 50 Hz mains it is more nuanced — see §10a below.
 
 The CT clamp gives current information.
 
@@ -228,6 +230,38 @@ The ZMPT101B gives voltage information.
 Because 240V is dangerous and too high for electronics.
 
 The ZMPT101B safely converts it into a small signal.
+
+## 10a. What the ADS1115 + ZMPT101B can actually measure
+
+Honest accounting of the sampling pipeline:
+
+- **ADS1115 max sample rate**: 860 samples per second total, shared across however many channels the multiplexer scans.
+- **Our setup uses 3 channels** (A0 = main current, A1 = voltage, A2 = AC current), so real-world throughput is about **200-300 samples per second per channel** after mux switching overhead.
+- **Malaysian mains is 50 Hz**, so one full sine cycle takes 20 milliseconds. At 250 SPS that gives us about **5 samples per cycle** — enough to estimate RMS magnitude reliably, not enough to resolve the phase relationship between voltage and current.
+
+What this means in practice:
+
+| We can compute | We cannot compute reliably |
+|---|---|
+| Vrms (RMS voltage) | True real power for non-resistive loads |
+| Irms per clamp (RMS current) | Power factor of an inverter AC |
+| Apparent power S = Vrms × Irms (units: VA) | Reactive power Q |
+| Energy estimate based on S over time | Real-time PF for variable loads |
+
+For **resistive demo loads** (kettle, hair dryer, iron, incandescent lamp) the power factor is ≈1.00, so apparent power equals real power within ~2%. The dashboard numbers you see live during the demo are accurate to within calibration error.
+
+For **inductive or switching loads** (LED lamp, fridge compressor, inverter AC) the power factor drops to 0.6-0.9 and apparent power overstates real watts by 10-40%. WattsEye applies a per-appliance power-factor correction at the insight layer using calibration constants stored in `ML/sensing/power_math.py`. This is documented in plan 04 §5.
+
+### When to upgrade the sensing chain
+
+The ADS1115 is fine for the prototype. Two upgrade paths exist if production accuracy matters:
+
+| Upgrade | Cost | What it buys you |
+|---|---|---|
+| Faster ADC (MCP3008 over SPI, ~200 kSPS) | RM 10-25 | Enough samples per cycle to compute true real power in software, including power factor |
+| Dedicated energy-metering IC (PZEM-004T or ADE7953) | RM 30-60 | Chip returns V, I, W, PF, and accumulated energy directly over UART/I2C — no software RMS math required |
+
+Neither is needed for the demo. Both are documented here so the next team knows the path forward.
 
 ## 11. Raspberry Pi
 
@@ -292,6 +326,15 @@ The ESP32 pin is not strong enough to drive the IR LED brightly by itself.
 The transistor acts like a switch.
 
 The ESP32 controls the transistor, and the transistor allows more current to pass through the IR LED.
+
+### Hardware is fine, protocol matters
+
+The IR LED + 2N2222 hardware is correct as-is for both the demo rig and a real Malaysian home. The thing that changes between the two is the **firmware payload**, not the parts:
+
+- **Demo rig (TSOP1838 + relay path)**: any 38 kHz IR carrier opens the relay. No brand code needed. Plain `tone(38000)` from the ESP32 works.
+- **Real home with an inverter AC** (Daikin, Panasonic, Midea, York, Hisense, etc.): the AC's onboard IR receiver expects a brand-specific state frame containing mode, setpoint, fan, and the power bit. A generic 38 kHz pulse will be ignored. Use the `IRremoteESP8266` Arduino library and call the brand's `.off()` (e.g. `IRDaikinESP`, `IRPanasonicAc`, `IRMideaAC`) — or capture the existing remote's "off" frame with a TSOP1838 in record mode and replay it.
+
+No new components need to be purchased to support real ACs. The bottleneck is brand-code selection in firmware, not hardware.
 
 ## 14a. IR receiver + relay (demo rig only)
 

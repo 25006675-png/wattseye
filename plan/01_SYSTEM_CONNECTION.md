@@ -44,7 +44,7 @@ Power readings + AC reading are stored as a time sequence
 ↓
 NILM models estimate non-AC appliance usage on the residual signal
 ↓
-Dashboard updates: NILM appliance estimates + direct AC reading + agreement %
+Dashboard updates: NILM appliance estimates + direct AC reading
 ↓
 If needed, WhatsApp alert or IR cutoff is triggered
 ↓
@@ -236,7 +236,7 @@ Total current/voltage + direct AC current readings
 ### AI subsystem
 
 ```text
-Power readings + rolling window + TFLite appliance models
+Power readings + rolling window + PyTorch ELECTRIcity appliance models
 ```
 
 Output:
@@ -341,34 +341,5 @@ Smart plugs should connect as an optional data source, not as a replacement for 
 Smart plug reading
 -> Pi local API / MQTT topic
 -> device_id mapped to appliance name
--> local database
--> dashboard exact plug-in reading
--> optional Supabase sync
-```
 
-Recommended MQTT/API shape:
 
-```text
-Topic: smartplug/{device_id}/power
-Payload: { "power_watts": 82, "energy_wh": 1200, "online": true }
-```
-
-Use smart plugs for selected plug-in appliances where exact measurement is helpful, such as a fridge, fan, lamp, or computer setup. Do not depend on smart plugs for hardwired AC, water heater, or the core demo.
-
-## 14. Most important takeaway
-
-WattsEye is not one single thing.
-
-It is a chain:
-
-```text
-Sensor → data → AI → decision → user action
-```
-
-If one part is missing, the system becomes weaker.
-
-But the most important proof is:
-
-```text
-Can hybrid sensing (one dedicated clamp + one NILM clamp) produce reliable AC measurement AND useful appliance-level insight for everything else?
-```

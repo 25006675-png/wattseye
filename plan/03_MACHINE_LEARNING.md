@@ -146,22 +146,27 @@ Additional models show broader household coverage.
 
 ## 9. Model architecture
 
-The ML plan uses a known NILM approach called **sequence-to-point learning**.
+WattsEye uses the **ELECTRIcity** approach (Sykiotis et al., 2022) — a Transformer-based sequence-to-point NILM architecture. It is built on top of the standard seq2point idea (look at a window of past power, predict the appliance at a target point) but replaces the CNN backbone with a small Transformer encoder.
 
 Simple meaning:
 
 ```text
 The model looks at a window of past power readings and predicts the appliance power at a target point.
+A Transformer's attention layers learn which moments in the window matter most for each appliance.
 ```
 
-Example:
+Architecture details for the shipped checkpoints (`ML/NILM/*.pth`):
 
 ```text
-Input window: last 599 seconds of total power
-Output: current kettle power estimate
+Input window:     240 samples (≈ 240 seconds at 1 Hz)
+Front conv:       1 → 64 channels, kernel 5
+Position encoding: learned, length 240
+Transformer:      2 blocks, 8 heads, d_model = 64, d_ff = 256
+Head:             ConvTranspose1d + mean pool + Linear(64→128) + Linear(128→1)
+Trained as:       Generator half of a GAN-style training loop (Discriminator weights also live in the .pth but are not used at inference)
 ```
 
-This is useful because appliances are easier to identify from patterns over time, not from one instant reading.
+Why ELECTRIcity instead of vanilla seq2point CNN: published results show better F1/MAE on UK-DALE and REFIT for the same appliance set, and the attention layers extract enough long-range structure that a shorter 240-sample window suffices. Trade-off: it is heavier than a CNN, so Pi-side inference speed must be benchmarked before claiming live multi-appliance inference. See §15-16 below for the runtime story.
 
 ## 10. Why one model per appliance?
 
@@ -240,19 +245,21 @@ Common metrics:
 
 For demo-core appliances, we mainly care that the result is understandable and stable during the live demo.
 
-## 15. TFLite conversion
+## 15. Runtime format on the Raspberry Pi
 
-The models are trained on a laptop or cloud notebook.
+The models are trained on a laptop or cloud notebook in **PyTorch**, and shipped as `.pth` checkpoints under `ML/NILM/`. For the prototype we run inference on the Pi directly in PyTorch — `ML/NILM/test_nilm_inference.py` shows the load + inference path.
 
-But the final prototype should run on Raspberry Pi.
+Order of operations:
 
-So the trained models need to be converted into **TensorFlow Lite** format.
+1. **First, benchmark PyTorch inference on the Pi.** Run `test_nilm_inference.py --all` on a Raspberry Pi 4 and measure ms/inference per model. If each model finishes well under 1000 ms / (number of live models), we hit the 1 Hz live budget and no further work is needed.
+2. **If too slow, optimise without leaving PyTorch first.** Try `torch.set_num_threads`, `torch.jit.trace` to TorchScript, and `torch.quantization` int8 post-training quantization. These usually deliver 2-4× speed-up with no framework change.
+3. **Only if still too slow, convert to ONNX or TFLite.** PyTorch → ONNX is straightforward; ONNX → TFLite is possible but the Transformer attention layers sometimes need manual op fixes. Treat this as a contingency, not the default path.
 
-This makes them smaller and faster for edge devices.
+The original plan called for TFLite from the start. We have moved away from that because (a) the ELECTRIcity Transformer doesn't convert cleanly to TFLite without rework, and (b) PyTorch on a Pi 4 is fast enough for small Transformer models in most cases. The benchmark in step 1 is the decision point.
 
-## 16. Quantization
+## 16. Quantization (optional optimisation)
 
-Quantization reduces model size and improves speed.
+Quantization reduces model size and improves speed by representing weights in int8 instead of float32.
 
 Simple meaning:
 
@@ -260,7 +267,9 @@ Simple meaning:
 Make the model lighter so Raspberry Pi can run it faster.
 ```
 
-But we must check that accuracy does not drop too much.
+For WattsEye, quantization is an **optional optimisation**, not a required step. We only apply it if the step-1 benchmark above shows we are missing the 1 Hz live budget. PyTorch supports post-training dynamic quantization with two lines of code (`torch.quantization.quantize_dynamic`); we can apply that before considering a full TFLite rewrite.
+
+Whatever path is used, accuracy must be re-checked against the validation set after quantization, since attention layers can be sensitive to int8.
 
 ## 17. Live inference concept
 
@@ -330,16 +339,33 @@ The ML output can also support bill forecasting and recommendations.
 Simple forecasting:
 
 ```text
-Projected monthly bill = current month-to-date cost / days passed * days in month
+Projected monthly bill = monthly_kwh_estimate -> TNB Tariff A bill calculator
 ```
 
-Smarter forecasting can compare current usage with the user's normal pattern.
+The "TNB Tariff A bill calculator" is implemented in `ML/insights/tnb_tariff.py` and matches the **TNB Regulatory Period 4 (RP4) Domestic tariff** that took effect on 1 July 2025 and runs through 31 December 2027. It is not a flat sen/kWh rate. The calculator reproduces the actual bill structure:
+
+```text
+Generation charge     27.03 sen/kWh    (37.03 sen/kWh if monthly usage > 1500 kWh)
++ Capacity charge      4.55 sen/kWh
++ Network charge      12.85 sen/kWh
+- EEI rebate          0-25 sen/kWh    (tiered by monthly band, top rebate 1-200 kWh)
++/- AFA               variable        (Automatic Fuel Adjustment, published monthly; waived <=600 kWh)
++ Retail charge       RM10/month      (waived <=600 kWh)
+```
+
+Why this matters for the pitch:
+
+- TNB does not expose a public consumer-facing API for tariff lookups. The schedule above is hardcoded from TNB's published RP4 documentation with full source URLs listed in `ML/insights/tnb_tariff.py` docstring and in `ML/insights/README.md`. The AFA constant must be refreshed each TNB billing cycle. Primary references: [myTNB tariff page](https://www.mytnb.com.my/tariff), [TNB press release 30 June 2025](https://www.tnb.com.my/assets/newsclip/30062025a.pdf), [paultan.org breakdown](https://paultan.org/2025/06/21/tnb-new-electricity-tariff-calculation-from-july-2025/), [SolarSunYield EEI table](https://www.solarsunyield.com/latestnews/nid/169869/).
+- Most student energy projects use a single flat rate (e.g. RM 0.50/kWh). WattsEye reproduces the actual bill structure including the EEI rebate and the high-band cliff at 1500 kWh.
+- The same module supports the optional **Time-of-Use (ToU) tariff** (peak 14:00-22:00 weekdays, off-peak otherwise) introduced under RP4. WattsEye can run both calculations on the same usage history and tell the user which tariff would be cheaper for their actual routine. This is a real product feature — TNB customers must opt in to ToU and most are not sure whether it would save them money.
+
+Smarter forecasting compares current usage with the user's normal pattern.
 
 Example:
 
 ```text
 Your projected bill is 22% higher than usual.
-Most extra usage came from AC between 2 PM and 5 PM.
+Most extra usage came from AC between 2 PM and 5 PM (peak ToU window).
 ```
 
 The energy coach should recommend specific actions, not generic advice.
@@ -348,7 +374,14 @@ Example:
 
 ```text
 Raise AC temperature by 1-2 degrees or enable auto-off after 20 minutes empty.
-Estimated saving: RM18/month.
+Estimated saving: RM18/month at your current band (350 kWh/month, RP4 standard).
+```
+
+Or, when the user's load profile leans late-night/weekend:
+
+```text
+Your usage pattern is 65% off-peak. Switching to TNB's Time-of-Use tariff
+could save about RM12/month based on the last 30 days.
 ```
 
 ## 20. Appliance health score
@@ -417,21 +450,83 @@ Residual (input)  = kettle + fridge + lamp + everything else  ← NILM runs on t
 
 The residual signal is easier for NILM to disaggregate because the most NILM-hostile load (inverter AC) has already been removed.
 
-### Use 2 — Live model validation
+### Use 2 — Internal model validation (not a UI tile)
 
-The NILM model also estimates AC from the main signal alone. Compare that estimate to the dedicated reading in real-time:
+During development and calibration, the NILM model also estimates AC from the main signal alone. We compare that estimate to the dedicated CT clamp reading offline:
 
 ```text
-Agreement % = (NILM AC estimate) / (Direct AC reading) × 100
+MAE_ac  = mean( |NILM AC estimate − Direct AC reading| )   over a logged window
+F1_ac   = event-detection score on AC on/off transitions
 ```
 
-When agreement is high (>90%), the model's other appliance estimates have higher implied credibility. This is the live "accuracy proof" moment shown on the dashboard.
+These metrics live in a validation notebook, not on the dashboard. Reasons we do not show this as a live UI tile:
+
+- The dedicated CT clamp is the displayed "ground truth," but it is itself a sensor with ±a few percent error — there is no third, more-precise reference to grade against on stage.
+- In the demo rig the AC SIMULATOR outlet sits on the same circuit both clamps observe, so any "agreement" reading is largely a property of the wiring, not the model.
+- A naive ratio (NILM/Direct) divides by zero when AC is off and shows misleading >100% when NILM overshoots.
+
+The honest pitch is: AC is shown as a direct measurement; non-AC NILM accuracy is reported as F1/MAE against UK-DALE and ENERTALK in the validation notebook.
+
+For internal development only, a power-monitoring smart plug placed inline with the AC SIMULATOR outlet can act as a temporary third reference to sanity-check both the dedicated CT clamp calibration and the NILM AC estimate. This is a dev workflow, not a production feature.
 
 ### Use 3 — Free auto-labeled training data
 
 Every second, we log `(main signal window, dedicated AC reading)`. Over weeks of operation in a real home, this becomes a fully-labeled training set for that specific home's AC, with no manual tagging by the user. Future model fine-tuning can use this dataset.
 
-## 24. ML summary
+## 24. Full ML lineup beyond NILM
+
+NILM is the headline technique but not the only one. The complete WattsEye ML stack maps to the four pitch boxes:
+
+| # | Technique | Job | Training data | Implementation |
+|---|---|---|---|---|
+| 1 | ELECTRIcity Transformer (§9 above) | Appliance disaggregation | UK-DALE / ENERTALK | `ML/NILM/*.pth` — done |
+| 2 | Isolation Forest (sklearn) | Anomaly detection on appliance signatures | Home's first 30 days as healthy baseline + synthetic injections | `ML/anomaly/isolation_forest.py` — planned |
+| 3 | K-Means clustering (sklearn) | Discover daily activity phases (morning / work / evening / sleep) | Home's occupancy + appliance log | `ML/routine/kmeans_phases.py` — planned |
+| 4 | Linear Regression (sklearn) | Appliance health drift — e.g. fridge cycle 40% longer than baseline = door seal or compressor issue | UK-DALE / REFIT fridge submeter (months of healthy data per home) | `ML/anomaly/appliance_health_regression.py` — planned |
+
+The TNB RP4 tariff calculator (`ML/insights/tnb_tariff.py`, see §19) sits alongside the four ML models as smart bill modelling — it is deterministic math, not ML, and we are honest about that.
+
+Why these four and not others:
+
+- **Isolation Forest** suits a "many normal examples, no labelled anomalies" data regime — which is exactly what a home with logged history gives us.
+- **K-Means** is unsupervised, defensible, and recognisable. It naturally clusters activity into 3-5 daily phases that the existing statistical routine engine then refines.
+- **Linear Regression** is the right tool for appliance health: predict `expected_duty_cycle = f(hour_of_day, day_of_week)` from learned baseline, flag residuals over a threshold. We tried framing this as dirty-AC-filter detection but no public dataset has clean-vs-dirty filter labels — so the model targets refrigerator efficiency drift instead, which UK-DALE and REFIT support.
+- We deliberately do **not** use RNN/LSTM for bill prediction. The bill is deterministic given consumption — see §19. The only forecast needed is future kWh, which a 7-day rolling average handles. LSTM would be ML for ML's sake.
+
+## 24a. Coach engine — turning ML output into action cards
+
+ML signals are useless until they become a specific, quantified action. The Coach engine
+(`ML/insights/coach/`) is the layer that does that. It runs a five-step pipeline:
+
+```text
+HomeSnapshot
+  → correlator   (join NILM + Occupancy + K-Means + Routine + IF into named Situations)
+  → quantifier   (attach RM impact via tnb_tariff.marginal_cost_rm + joint confidence)
+  → templates    (deterministic card text — no LLM on the load-bearing path)
+  → ranker       (score = √impact × confidence × novelty × dismiss_decay × severity)
+  → list[Card]   (top 2 surfaced, rest secondary)
+```
+
+The system ships **12 recommendation archetypes** organised into 5 families:
+
+| Family | Archetypes |
+|---|---|
+| Waste | 1 left_on_empty, 2 phantom_standby, 3 simultaneous_peak_load |
+| Tariff (Malaysia-specific) | 4 tou_switch, 5 rp4_tier_cliff, 6 peak_window_shift |
+| Forecast | 7 bill_trending_high, 8 comparative_regression, 9 routine_shift |
+| Context | 10 weather_correlated_ac, 11 anomaly_with_action |
+| Capital | 12 inefficient_upgrade (links to ST efficiency registry) |
+
+Design rules:
+- Every numeric claim on a card traces to `raw_metrics` + a tariff call — auditable line by line.
+- Templates are deterministic; an LLM is only used (optionally) for narrative weekly digests, never for numbers.
+- Archetypes #4 and #5 use the TNB RP4 tariff model directly and are the strongest differentiators vs Sense / Bidgely / Emporia (none of which model TNB RP4).
+- Weather context (#10) uses Open-Meteo (`ML/insights/coach/weather.py`), 1-hour disk cache, 9 Malaysian cities.
+
+Routine-aware detection no longer has its own UI tab. Routine evidence is embedded
+inside each Coach card under "Why this appeared" — see plan 05 §14.
+
+## 25. ML summary
 
 The ML system does this:
 

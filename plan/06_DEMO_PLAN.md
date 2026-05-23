@@ -29,7 +29,7 @@ Minimum live demo:
 1. Dashboard opens.
 2. Total power (from main clamp) and AC power (from AC clamp) are both shown.
 3. A general-branch appliance turns on (e.g., kettle). Only main clamp reading rises.
-4. AC-branch appliance turns on (hair dryer in AC SIMULATOR outlet). Both clamps rise. Agreement % between NILM AC estimate and direct AC reading is displayed.
+4. AC-branch appliance turns on (hair dryer in AC SIMULATOR outlet). Both clamps rise. The AC card shows the dedicated CT clamp's direct reading; only Clamp #1 sees general-branch loads.
 5. At least one demo-core appliance is identified or highlighted by NILM.
 6. Live AC cutoff: WhatsApp alert → user reply → IR signal → relay opens → AC SIMULATOR outlet goes to zero on both clamps → confirmation message back.
 7. At least one smart insight is shown, such as projected bill, waste score, or energy coach recommendation.
@@ -129,25 +129,26 @@ Explain:
 The system detects the power pattern and estimates kettle usage.
 ```
 
-### Part 5 — Turn on another appliance + show NILM vs direct AC agreement
+### Part 5 — Turn on the AC-branch appliance and demonstrate clamp separation
 
 Turn on a hair dryer in the AC SIMULATOR outlet (acts as the AC proxy on the dedicated branch).
 
 Show dashboard update:
 
 - Both clamps now read higher
-- AC card shows: `NILM estimate 1450W | Direct sensor 1500W | Agreement 96.7%`
+- AC card shows the dedicated CT clamp reading (e.g. `1500W · Measured · Dedicated CT clamp`)
 
 Explain:
 
 ```text
 The hair dryer is on the dedicated AC branch, so both clamps see it.
-Our AI estimates AC consumption from the main signal alone — it says 1450W.
-Our dedicated sensor measures 1500W exactly. Agreement is 96.7%.
-This is live proof that our AI is working — you can watch the percentage update in real time.
+The dedicated clamp gives us the AC value directly — no AI uncertainty.
+NILM handles everything else on the residual signal (total minus AC).
 ```
 
-Then turn on a lamp on the general branch. Only main clamp rises; AC clamp stays at its previous reading. This demonstrates the separation: the AC clamp is specific to its circuit, the NILM clamp sees everything.
+Then turn on a kettle/lamp on the general branch. Only the main clamp rises; the AC clamp stays at its previous reading. This is the live separation demo: the AC clamp is specific to its circuit, the NILM clamp sees the rest.
+
+Honest framing for judges who ask about NILM accuracy: NILM is validated offline against UK-DALE and ENERTALK using F1 and MAE — those numbers belong in the validation notebook, not on the live UI. The live demo proves architecture and pipeline, not absolute model accuracy.
 
 ### Part 6 — Live AC empty-room cutoff (the flagship Pillar 2 moment)
 
@@ -223,7 +224,7 @@ Be clear internally.
 |---|---|---|
 | Total power sensing (Clamp #1) | Live | Must work |
 | Direct AC power sensing (Clamp #2) | Live | Must work |
-| NILM vs Direct AC agreement % | Live | Pillar 1 validation moment |
+| NILM accuracy report (F1, MAE on UK-DALE/ENERTALK) | Notebook | Validation lives in the offline notebook, not the dashboard |
 | Kettle detection | Live preferred | Demo-core |
 | Lamp / hair dryer detection | Live preferred | Demo-core |
 | AC detection (hair dryer as proxy) | Live | Via dedicated clamp, exact |
@@ -259,7 +260,7 @@ Look at the dashboard. The baseline is around 200 watts.
 
 When I turn on this kettle, the total power jumps. Our NILM model recognizes the pattern and labels it as kettle. The AC clamp stays at zero — the kettle isn't on the AC circuit.
 
-Now I plug a hair dryer into the AC SIMULATOR outlet — it represents the AC. Both clamps now rise. And here's the proof our AI is working: NILM estimates 1450 watts, the dedicated sensor measures 1500 watts. We're 96.7 percent in agreement, live on stage.
+Now I plug a hair dryer into the AC SIMULATOR outlet — it represents the AC. Both clamps now rise. The AC card just shows the dedicated clamp's reading directly — no AI uncertainty for the AC. That's the point of the second clamp.
 
 Now watch this. The mmWave sensor says nobody is in the room, but the AC is still on. The system sends a WhatsApp alert to my phone. I reply Y. The ESP32 fires the IR off command — and the AC simulator cuts off. Dashboard confirms zero. Saved about 85 sen so far.
 

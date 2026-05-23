@@ -1,0 +1,2551 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WattsEye Mobile Prototype</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --text: #18202a;
+      --muted: #687381;
+      --line: #d9dee5;
+      --green: #167a4a;
+      --red: #bd2d2d;
+      --amber: #a96b0b;
+      --blue: #1d5f99;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .app {
+      max-width: 460px;
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 18px 14px 88px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .status-pill {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .metric,
+    .card,
+    .alert {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .metric {
+      padding: 12px;
+      min-height: 78px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+
+    .value {
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .alert {
+      border-left: 5px solid var(--red);
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .alert .eyebrow {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 5px;
+    }
+
+    .alert h2 {
+      margin: 0 0 8px;
+      font-size: 19px;
+    }
+
+    .alert p {
+      color: var(--muted);
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--text);
+      color: #fff;
+      border-color: var(--text);
+    }
+
+    button.warning {
+      background: var(--red);
+      color: #fff;
+      border-color: var(--red);
+    }
+
+    .section-title {
+      margin: 18px 0 9px;
+      font-size: 15px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .card {
+      padding: 14px;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+
+    .card.featured {
+      border-color: #b7c7d8;
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .device {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .source {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .watts {
+      text-align: right;
+      font-size: 18px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .cost {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      margin-top: 4px;
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #eef2f6;
+      color: #334155;
+    }
+
+    .badge.red {
+      background: #fde8e8;
+      color: var(--red);
+    }
+
+    .badge.green {
+      background: #e6f4ed;
+      color: var(--green);
+    }
+
+    .badge.amber {
+      background: #fff3d6;
+      color: var(--amber);
+    }
+
+    .mini-history {
+      height: 38px;
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      margin-top: 14px;
+    }
+
+    .bar {
+      flex: 1;
+      min-width: 0;
+      background: #cbd5e1;
+      border-radius: 3px 3px 0 0;
+    }
+
+    .nav {
+      position: fixed;
+      left: 50%;
+      bottom: 0;
+      transform: translateX(-50%);
+      width: min(460px, 100%);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+    }
+
+    .nav button {
+      border: 0;
+      border-radius: 0;
+      padding: 12px 6px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 12px;
+    }
+
+    .nav button.active {
+      color: var(--text);
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 68px;
+      transform: translateX(-50%) translateY(16px);
+      width: min(420px, calc(100% - 28px));
+      background: #18202a;
+      color: #fff;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 14px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 3;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .list-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      padding: 13px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .list-row:first-child {
+      border-top: 0;
+    }
+
+    .row-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .row-subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.3;
+    }
+
+    .right-note {
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .wide-chart {
+      height: 150px;
+      display: flex;
+      align-items: flex-end;
+      gap: 7px;
+      margin: 10px 0 4px;
+    }
+
+    .stack {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column-reverse;
+      border-radius: 4px 4px 0 0;
+      overflow: hidden;
+      background: #e5e7eb;
+    }
+
+    .seg-ac {
+      background: #3b82f6;
+    }
+
+    .seg-other {
+      background: #94a3b8;
+    }
+
+    .seg-unknown {
+      background: #f59e0b;
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+      background: #94a3b8;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.36);
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      padding: 14px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(460px, 100%);
+      max-height: 88vh;
+      overflow: auto;
+      background: #fff;
+      border-radius: 12px 12px 8px 8px;
+      padding: 16px;
+      border: 1px solid var(--line);
+    }
+
+    .modal-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .modal h3 {
+      margin: 0 0 4px;
+      font-size: 22px;
+    }
+
+    .modal-section {
+      border-top: 1px solid var(--line);
+      padding-top: 13px;
+      margin-top: 13px;
+    }
+
+    .modal-section h4 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .modal-section p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.4;
+      margin: 0 0 9px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    input {
+      flex: 1;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+    }
+
+    @media (min-width: 760px) {
+      body {
+        background: #e8edf2;
+      }
+
+      .app {
+        margin-top: 24px;
+        margin-bottom: 24px;
+        min-height: calc(100vh - 48px);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+    }
+
+    /* Login overlay */
+    .auth-screen {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(160deg, #1d5f99 0%, #18202a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 9;
+    }
+
+    .auth-screen.hidden {
+      display: none;
+    }
+
+    .auth-card {
+      width: min(380px, 100%);
+      background: var(--surface);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+    }
+
+    .auth-card h2 {
+      margin: 0 0 4px;
+      font-size: 24px;
+    }
+
+    .auth-card .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+
+    .auth-card label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 12px 0 4px;
+      font-weight: 700;
+    }
+
+    .auth-card input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    .auth-card .full-btn {
+      width: 100%;
+      margin-top: 16px;
+      padding: 12px;
+    }
+
+    .auth-card .ghost-link {
+      display: block;
+      margin-top: 12px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--muted);
+      background: none;
+      border: 0;
+      padding: 6px;
+      cursor: pointer;
+      text-decoration: underline;
+      width: 100%;
+    }
+
+    .auth-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .auth-meta .logo-dot {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--blue);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+    }
+
+    .user-pill {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .user-pill .email {
+      font-size: 12px;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .signout-btn {
+      background: none;
+      border: 0;
+      color: var(--muted);
+      font-size: 11px;
+      padding: 0;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    /* WhatsApp simulation */
+    .whatsapp-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.44);
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      padding: 14px;
+      z-index: 5;
+    }
+
+    .whatsapp-modal.open {
+      display: flex;
+    }
+
+    .whatsapp-window {
+      width: min(420px, 100%);
+      max-height: 86vh;
+      background: #ece5dd;
+      border-radius: 12px 12px 8px 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .whatsapp-header {
+      background: #075e54;
+      color: #fff;
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .whatsapp-header .title {
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .whatsapp-header .subtitle {
+      font-size: 11px;
+      opacity: 0.85;
+    }
+
+    .whatsapp-header .close-btn {
+      background: transparent;
+      color: #fff;
+      border: 0;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .whatsapp-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background-image: linear-gradient(180deg, #ece5dd 0%, #d9d2c4 100%);
+    }
+
+    .wa-bubble {
+      max-width: 78%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.35;
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+    }
+
+    .wa-bubble .meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 4px;
+      color: #667781;
+      font-size: 10px;
+    }
+
+    .wa-bubble.in {
+      background: #fff;
+      align-self: flex-start;
+      border-top-left-radius: 0;
+    }
+
+    .wa-bubble.out {
+      background: #dcf8c6;
+      align-self: flex-end;
+      border-top-right-radius: 0;
+    }
+
+    .whatsapp-footer {
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      background: #f0f0f0;
+      border-top: 1px solid #d6d0c4;
+    }
+
+    .whatsapp-footer button {
+      flex: 1;
+      padding: 10px;
+      font-size: 13px;
+      border-radius: 20px;
+      border: 1px solid #c5cbd1;
+      background: #fff;
+    }
+
+    .whatsapp-footer button.primary {
+      background: #25d366;
+      color: #fff;
+      border-color: #25d366;
+    }
+
+    /* Bill page */
+    .tariff-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #e3edf6;
+      color: var(--blue);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tariff-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      margin: 0;
+    }
+
+    .bill-total {
+      font-size: 32px;
+      font-weight: 800;
+      line-height: 1.05;
+      margin: 8px 0 2px;
+    }
+
+    .bill-total-sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .bill-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 14px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .bill-line:first-of-type {
+      border-top: 0;
+    }
+
+    .bill-line .name {
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .bill-line .detail {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .bill-line .amount {
+      font-weight: 700;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .bill-line .amount.rebate {
+      color: var(--green);
+    }
+
+    .bill-line .amount.waived {
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 12px;
+    }
+
+    .bill-line.summary {
+      border-top: 2px solid var(--text);
+      padding-top: 12px;
+      margin-top: 2px;
+    }
+
+    .bill-line.summary .name,
+    .bill-line.summary .amount {
+      font-size: 16px;
+    }
+
+    .tou-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 6px 0 10px;
+    }
+
+    .tou-plan {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .tou-plan.recommended {
+      border-color: var(--green);
+      background: #f1f8f4;
+    }
+
+    .tou-plan .plan-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .tou-plan .plan-amount {
+      font-size: 20px;
+      font-weight: 800;
+      margin-top: 4px;
+    }
+
+    .tou-plan .plan-effective {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    .eei-band-meter {
+      position: relative;
+      height: 10px;
+      background: #e5e7eb;
+      border-radius: 999px;
+      margin: 12px 0 6px;
+      overflow: hidden;
+    }
+
+    .eei-band-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 100%;
+      background: linear-gradient(90deg, #167a4a 0%, #a96b0b 70%, #bd2d2d 100%);
+      border-radius: 999px;
+    }
+
+    .eei-band-tick {
+      position: absolute;
+      top: -3px;
+      width: 2px;
+      height: 16px;
+      background: var(--text);
+      border-radius: 1px;
+    }
+
+    .eei-legend {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .info-footnote {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+      margin-top: 12px;
+    }
+
+    .info-footnote a {
+      color: var(--blue);
+      text-decoration: underline;
+    }
+
+    /* Tab grids */
+    .nav.five { grid-template-columns: repeat(5, 1fr); }
+    .nav.four { grid-template-columns: repeat(4, 1fr); }
+
+    /* Coach v2 — recommendation cards */
+    .coach-summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .coach-summary .metric { text-align: left; }
+
+    .rec-card {
+      border-left: 4px solid var(--muted);
+      padding: 14px 16px;
+      transition: border-left-color .15s ease;
+    }
+    .rec-card[data-family="waste"]    { border-left-color: #e07b3f; }
+    .rec-card[data-family="tariff"]   { border-left-color: #3f7be0; }
+    .rec-card[data-family="forecast"] { border-left-color: #a23fe0; }
+    .rec-card[data-family="context"]  { border-left-color: #3fa6e0; }
+    .rec-card[data-family="capital"]  { border-left-color: #2f9c5b; }
+
+    .rec-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .rec-title {
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1.3;
+      color: var(--text);
+    }
+    .rec-tags {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .tag {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 3px 7px;
+      border-radius: 4px;
+      background: #eef0f3;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .tag.fam-waste    { background: #fceee1; color: #8a4515; }
+    .tag.fam-tariff   { background: #e3edfb; color: #1d4a99; }
+    .tag.fam-forecast { background: #ede1fb; color: #5a1d99; }
+    .tag.fam-context  { background: #e1f0fb; color: #155a8a; }
+    .tag.fam-capital  { background: #dff0e6; color: #195e34; }
+    .tag.sev-high   { background: #fbe1e1; color: #991d1d; }
+    .tag.sev-medium { background: #fbf2e1; color: #7a5a14; }
+    .tag.sev-low    { background: #eef0f3; color: var(--muted); }
+    .tag.conf       { background: #eef0f3; color: var(--muted); }
+
+    .rec-impact {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.45;
+      margin-bottom: 10px;
+    }
+    .rec-action {
+      background: #f5f7fa;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .rec-action-label {
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    .rec-action-text {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }
+    .rec-meta {
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .rec-meta .saving { color: var(--green); font-weight: 700; }
+
+    .rec-buttons {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .rec-buttons button {
+      flex: 1;
+      font-size: 12px;
+      padding: 8px 6px;
+    }
+
+    .rec-expand {
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+      padding: 6px 0 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .rec-expand::before {
+      content: "▸";
+      transition: transform .15s ease;
+      display: inline-block;
+    }
+    .rec-expand[aria-expanded="true"]::before {
+      transform: rotate(90deg);
+    }
+    .rec-detail {
+      display: none;
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #fafbfc;
+      border-radius: 8px;
+      border: 1px solid #eef0f3;
+    }
+    .rec-expand[aria-expanded="true"] + .rec-detail {
+      display: block;
+    }
+    .rec-detail-title {
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      margin: 0 0 6px;
+    }
+    .rec-detail ul {
+      margin: 0 0 10px;
+      padding-left: 16px;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+    }
+    .rec-detail ul:last-child { margin-bottom: 0; }
+    .rec-detail code {
+      background: #f0f2f5;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+
+    .surface-banner {
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 14px 4px 4px;
+    }
+
+    .rec-card.dismissed {
+      opacity: 0.45;
+      filter: grayscale(0.5);
+    }
+    .rec-card.dismissed .rec-buttons { display: none; }
+    .rec-card.acted {
+      border-left-color: var(--green) !important;
+      background: #f5fbf7;
+    }
+
+    /* Profile tab */
+    .profile-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 4px 2px 0;
+    }
+    .profile-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6c8ed0, #3e5a8c);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .profile-name {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .profile-email {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .settings-section-label {
+      font-size: 10px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 14px 4px 6px;
+    }
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #eef0f3;
+      font-size: 13px;
+    }
+    .settings-row:last-child { border-bottom: 0; }
+    .settings-row .settings-label { color: var(--text); }
+    .settings-row .settings-value {
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .settings-row .settings-value.linked { color: #2f9c5b; font-weight: 600; }
+    .settings-row.action { cursor: pointer; }
+    .settings-row.action .settings-label { color: #3f7be0; }
+    .settings-row.danger .settings-label { color: #c44; }
+    .chev { color: #c4cad3; font-size: 14px; }
+
+    /* Coach */
+    .action-card {
+      border-left: 4px solid var(--green);
+    }
+
+    .saving-amount {
+      color: var(--green);
+      font-weight: 800;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .saving-amount + .saving-unit {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* Routine */
+    .heat-grid {
+      display: grid;
+      grid-template-columns: 30px repeat(24, 1fr);
+      gap: 2px;
+      margin: 10px 0 4px;
+    }
+
+    .heat-day {
+      font-size: 10px;
+      color: var(--muted);
+      align-self: center;
+      font-weight: 700;
+    }
+
+    .heat-cell {
+      height: 12px;
+      background: #eef2f6;
+      border-radius: 2px;
+    }
+
+    .heat-cell.lvl1 { background: #cfe2ef; }
+    .heat-cell.lvl2 { background: #8eb8d6; }
+    .heat-cell.lvl3 { background: #2f6f9e; }
+
+    .heat-cell.phase-sleep    { background: #c7d2e0; }
+    .heat-cell.phase-morning  { background: #b8d8c2; }
+    .heat-cell.phase-midday   { background: #e8e5d4; }
+    .heat-cell.phase-evening  { background: #f0c9a8; }
+
+    .phase-legend {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 6px;
+    }
+
+    .phase-legend .swatch {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+
+    .heat-axis {
+      display: grid;
+      grid-template-columns: 30px repeat(4, 1fr);
+      color: var(--muted);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+
+    .heat-axis span:nth-child(n+2) {
+      text-align: left;
+    }
+
+    .hour-track {
+      display: grid;
+      grid-template-columns: repeat(24, 1fr);
+      gap: 2px;
+      margin: 12px 0 4px;
+    }
+
+    .hour-cell {
+      height: 12px;
+      background: #eef2f6;
+      border-radius: 2px;
+    }
+
+    .hour-cell.active {
+      background: var(--blue);
+    }
+
+    .hour-axis {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <section class="auth-screen" id="authScreen" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <div class="auth-meta">
+        <div class="logo-dot">W</div>
+        <div>
+          <div style="font-weight: 800;">WattsEye</div>
+          <div class="source">Hybrid home electricity monitor</div>
+        </div>
+      </div>
+      <h2 id="authTitle">Sign in</h2>
+      <div class="subtitle">Use any email to demo. Local login works without internet.</div>
+      <form id="authForm">
+        <label for="emailInput">Email</label>
+        <input id="emailInput" type="email" autocomplete="email" value="choongzhuolin@gmail.com" required>
+        <label for="passwordInput">Password</label>
+        <input id="passwordInput" type="password" autocomplete="current-password" value="demo-pass" required>
+        <button class="primary full-btn" type="submit">Sign in</button>
+      </form>
+      <button class="ghost-link" id="demoSkip" type="button">Continue as demo (no account)</button>
+    </div>
+  </section>
+
+  <main class="app">
+    <header>
+      <div>
+        <h1>WattsEye</h1>
+        <div class="source" id="dataSourcePill">Live local · Home Pi</div>
+      </div>
+      <div class="user-pill" id="userPill">
+        <div class="email" id="userEmail">choongzhuolin@gmail.com</div>
+        <button class="signout-btn" id="signoutBtn" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <section class="tab-panel active" id="dashboardTab">
+      <section class="summary">
+        <div class="metric">
+          <div class="label">Today cost</div>
+          <div class="value">RM4.97</div>
+        </div>
+        <div class="metric">
+          <div class="label">Current power</div>
+          <div class="value">1.42 kW</div>
+        </div>
+        <div class="metric">
+          <div class="label">Appliances on</div>
+          <div class="value">4</div>
+        </div>
+        <div class="metric">
+          <div class="label">Projected month</div>
+          <div class="value">RM149</div>
+        </div>
+      </section>
+
+      <section class="alert" id="priorityAlert">
+        <div class="eyebrow">HIGH PRIORITY</div>
+        <h2>AC running in an empty room</h2>
+        <p id="priorityAlertText">Measured AC load is 900W for 25 minutes with no occupancy. Estimated avoidable cost is RM0.12 so far at your current band (RM0.32/kWh).</p>
+        <div class="actions">
+          <button class="warning" data-action="turn-off-ac">Turn off</button>
+          <button class="primary" data-action="whatsapp-ac">Send WhatsApp</button>
+          <button data-action="keep-ac">Keep on</button>
+        </div>
+      </section>
+
+      <div class="section-title">Featured Device</div>
+      <section class="card featured" data-device="ac">
+        <div class="card-head">
+          <div>
+            <div class="device">Air Conditioner</div>
+            <div class="source">Measured · Dedicated CT clamp</div>
+          </div>
+          <div>
+            <div class="watts" id="acWatts">900W</div>
+            <div class="cost">RM43.20 this month</div>
+          </div>
+        </div>
+        <div class="badge-row" id="acBadges">
+          <span class="badge red">Empty room</span>
+          <span class="badge">RM3.50/month if repeated daily</span>
+        </div>
+        <div class="mini-history" aria-label="AC daily history">
+          <div class="bar" style="height: 24%"></div>
+          <div class="bar" style="height: 38%"></div>
+          <div class="bar" style="height: 72%"></div>
+          <div class="bar" style="height: 55%"></div>
+          <div class="bar" style="height: 66%"></div>
+          <div class="bar" style="height: 48%"></div>
+          <div class="bar" style="height: 81%"></div>
+        </div>
+      </section>
+
+      <div class="section-title">Other Appliances</div>
+      <section class="card" data-device="kettle">
+        <div class="card-head">
+          <div>
+            <div class="device">Kettle</div>
+            <div class="source">Estimated · NILM</div>
+          </div>
+          <div>
+            <div class="watts">0W</div>
+            <div class="cost">~RM4.70 this month</div>
+          </div>
+        </div>
+        <div class="badge-row">
+          <span class="badge green">Normal routine</span>
+        </div>
+      </section>
+
+      <section class="card" data-device="fridge">
+        <div class="card-head">
+          <div>
+            <div class="device">Fridge</div>
+            <div class="source">Estimated · NILM</div>
+          </div>
+          <div>
+            <div class="watts">118W</div>
+            <div class="cost">~RM18.70 this month</div>
+          </div>
+        </div>
+        <div class="badge-row">
+          <span class="badge amber">Health watch · duty cycle +24% (z=2.4σ)</span>
+          <span class="badge">UK-DALE baseline</span>
+        </div>
+      </section>
+
+      <section class="card" data-device="unknown">
+        <div class="card-head">
+          <div>
+            <div class="device" id="unknownTitle">Unknown Load</div>
+            <div class="source" id="unknownSource">Signature library · 88% match</div>
+          </div>
+          <div>
+            <div class="watts">620W</div>
+            <div class="cost">RM0.20/h at current band</div>
+          </div>
+        </div>
+        <div class="badge-row" id="unknownBadges">
+          <span class="badge amber">Likely rice cooker</span>
+          <span class="badge">Tap to confirm and label</span>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="historyTab">
+      <div class="section-title">Bill Trend</div>
+      <section class="card">
+        <div class="summary">
+          <div class="metric">
+            <div class="label">Month to date</div>
+            <div class="value">RM82.30</div>
+          </div>
+          <div class="metric">
+            <div class="label">Projected bill</div>
+            <div class="value">RM149</div>
+          </div>
+        </div>
+        <div class="wide-chart" aria-label="Stacked daily cost chart">
+          <div class="stack" style="height: 42%"><div class="seg-ac" style="height: 52%"></div><div class="seg-unknown" style="height: 8%"></div><div class="seg-other" style="height: 40%"></div></div>
+          <div class="stack" style="height: 48%"><div class="seg-ac" style="height: 55%"></div><div class="seg-unknown" style="height: 10%"></div><div class="seg-other" style="height: 35%"></div></div>
+          <div class="stack" style="height: 58%"><div class="seg-ac" style="height: 62%"></div><div class="seg-unknown" style="height: 6%"></div><div class="seg-other" style="height: 32%"></div></div>
+          <div class="stack" style="height: 46%"><div class="seg-ac" style="height: 48%"></div><div class="seg-unknown" style="height: 12%"></div><div class="seg-other" style="height: 40%"></div></div>
+          <div class="stack" style="height: 72%"><div class="seg-ac" style="height: 68%"></div><div class="seg-unknown" style="height: 9%"></div><div class="seg-other" style="height: 23%"></div></div>
+          <div class="stack" style="height: 64%"><div class="seg-ac" style="height: 57%"></div><div class="seg-unknown" style="height: 16%"></div><div class="seg-other" style="height: 27%"></div></div>
+          <div class="stack" style="height: 82%"><div class="seg-ac" style="height: 61%"></div><div class="seg-unknown" style="height: 14%"></div><div class="seg-other" style="height: 25%"></div></div>
+        </div>
+        <div class="chart-legend">
+          <span><span class="dot" style="background:#3b82f6"></span>AC</span>
+          <span><span class="dot" style="background:#94a3b8"></span>Other</span>
+          <span><span class="dot" style="background:#f59e0b"></span>Unknown</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge">Today RM4.97</span>
+          <span class="badge amber">22% above usual</span>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button data-jump-coach="bill_trending_high" type="button">See Coach for action →</button>
+        </div>
+      </section>
+      <div class="section-title">Appliance Breakdown</div>
+      <section class="card">
+        <div class="list-row">
+          <div>
+            <div class="row-title">Air Conditioner</div>
+            <div class="row-subtitle">Measured directly · 29% of projected bill</div>
+          </div>
+          <div class="right-note">RM43.20</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Fridge</div>
+            <div class="row-subtitle">Estimated · health watch active</div>
+          </div>
+          <div class="right-note">~RM18.70</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Kettle</div>
+            <div class="row-subtitle">Estimated · normal routine</div>
+          </div>
+          <div class="right-note">~RM4.70</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Unknown / Other</div>
+            <div class="row-subtitle">Needs user labels to improve future breakdown</div>
+          </div>
+          <div class="right-note">RM15.40</div>
+        </div>
+      </section>
+      <div class="section-title">Waste History</div>
+      <section class="card">
+        <div class="list-row">
+          <div>
+            <div class="row-title">Empty-room AC</div>
+            <div class="row-subtitle">3 events this week · 71 minutes total</div>
+          </div>
+          <div class="right-note">RM0.64</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">High standby nights</div>
+            <div class="row-subtitle">1 night above normal baseline</div>
+          </div>
+          <div class="right-note">RM0.28</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">User corrections</div>
+            <div class="row-subtitle">2 labels improved household profiles</div>
+          </div>
+          <div class="right-note">Saved</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="coachTab">
+      <div class="section-title">Coach Summary</div>
+      <section class="card">
+        <div class="coach-summary">
+          <div class="metric">
+            <div class="label">Active insights</div>
+            <div class="value" id="coachActiveCount">12</div>
+          </div>
+          <div class="metric">
+            <div class="label">Potential / month</div>
+            <div class="value" style="color: var(--green);" id="coachPotential">RM47</div>
+          </div>
+          <div class="metric">
+            <div class="label">Already saved</div>
+            <div class="value">RM2.72</div>
+          </div>
+        </div>
+        <div class="row-subtitle" style="margin-top: 6px;">
+          12 cards across 5 families — ranked by RM impact × confidence × novelty. Top 2 surfaced; the rest available below.
+        </div>
+      </section>
+
+      <div style="display: flex; gap: 8px; padding: 4px 0 12px;">
+        <button data-coach-extra="digest" style="flex:1; font-size:12px; padding:8px 6px;">📅 Send weekly digest</button>
+        <button data-coach-extra="pdf" style="flex:1; font-size:12px; padding:8px 6px;">📄 Generate PDF report</button>
+      </div>
+
+      <div class="surface-banner">Top recommendations now</div>
+      <div id="coachSurfaced"></div>
+
+      <div class="surface-banner">More insights</div>
+      <div id="coachSecondary"></div>
+
+      <p class="info-footnote" style="padding: 12px 4px 0;">
+        Generated by <code>ML/insights/coach/</code> — correlator → quantifier (TNB RP4) → templates → ranker. Routine evidence is inline in each card under <i>Why this appeared</i>.
+      </p>
+    </section>
+
+    <section class="tab-panel" id="billTab">
+      <div class="section-title">Projected Bill</div>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <span class="tariff-badge" id="activeTariffBadge">
+              <span class="dot"></span>
+              <span id="activeTariffLabel">TNB RP4 · Standard</span>
+            </span>
+            <div class="bill-total" id="projectedTotal">RM149.18</div>
+            <div class="bill-total-sub" id="projectedTotalSub">460 kWh projected · 32.43 sen/kWh effective</div>
+          </div>
+        </div>
+
+        <div id="billBreakdownStandard">
+          <div class="bill-line">
+            <div>
+              <div class="name">Generation</div>
+              <div class="detail">460 kWh × 27.03 sen/kWh</div>
+            </div>
+            <div class="amount">RM124.34</div>
+          </div>
+          <div class="bill-line">
+            <div>
+              <div class="name">Capacity</div>
+              <div class="detail">460 kWh × 4.55 sen/kWh</div>
+            </div>
+            <div class="amount">RM20.93</div>
+          </div>
+          <div class="bill-line">
+            <div>
+              <div class="name">Network</div>
+              <div class="detail">460 kWh × 12.85 sen/kWh</div>
+            </div>
+            <div class="amount">RM59.11</div>
+          </div>
+          <div class="bill-line">
+            <div>
+              <div class="name">Energy Efficiency Incentive</div>
+              <div class="detail">Rebate, band 451-500 kWh · -12.00 sen/kWh</div>
+            </div>
+            <div class="amount rebate">- RM55.20</div>
+          </div>
+          <div class="bill-line">
+            <div>
+              <div class="name">AFA (Automatic Fuel Adjustment)</div>
+              <div class="detail">Waived under 600 kWh · current rate +0.00 sen/kWh</div>
+            </div>
+            <div class="amount waived">waived</div>
+          </div>
+          <div class="bill-line">
+            <div>
+              <div class="name">Retail charge</div>
+              <div class="detail">Waived under 600 kWh · normally RM10.00/month</div>
+            </div>
+            <div class="amount waived">waived</div>
+          </div>
+          <div class="bill-line summary">
+            <div>
+              <div class="name">Projected total</div>
+              <div class="detail">TNB RP4 standard schedule, your usage pattern</div>
+            </div>
+            <div class="amount">RM149.18</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="section-title">Standard vs Time-of-Use</div>
+      <section class="card">
+        <div class="row-subtitle" style="margin-bottom: 6px;">Based on your last 30 days. ToU peak hours are weekdays 2-10 PM; off-peak all other hours.</div>
+        <div class="tou-row">
+          <div class="tou-plan" id="planStandardCard">
+            <div class="plan-label">Standard</div>
+            <div class="plan-amount">RM149.18</div>
+            <div class="plan-effective">32.43 sen/kWh effective</div>
+          </div>
+          <div class="tou-plan recommended" id="planTouCard">
+            <div class="plan-label">Time-of-Use</div>
+            <div class="plan-amount">RM143.80</div>
+            <div class="plan-effective">31.26 sen/kWh effective</div>
+          </div>
+        </div>
+        <div class="badge-row">
+          <span class="badge green">ToU would be RM5.38/month cheaper</span>
+          <span class="badge">35% peak / 65% off-peak</span>
+        </div>
+        <p class="info-footnote" style="margin-top: 14px;">
+          ToU is opt-in and needs a TNB smart meter. The saving is small at your current pattern because most of your AC use is in the evening peak. Shifting half your AC runtime to before 2 PM or after 10 PM could increase the saving to about RM12/month.
+        </p>
+        <div class="actions" style="margin-top: 8px;">
+          <button id="switchTariffBtn" type="button">Preview bill as ToU</button>
+          <button class="primary" data-jump-coach="tou_switch" type="button">See Coach to apply →</button>
+        </div>
+      </section>
+
+      <div class="section-title">Energy Efficiency Incentive Band</div>
+      <section class="card">
+        <div class="row-subtitle">You're at <b>460 kWh</b> projected this month. The EEI rebate decreases as you cross each band — using less moves you to a higher rebate tier.</div>
+        <div class="eei-band-meter">
+          <div class="eei-band-fill" style="width: 46%;"></div>
+          <div class="eei-band-tick" style="left: 46%;"></div>
+        </div>
+        <div class="eei-legend">
+          <span>0 kWh · 25 sen rebate</span>
+          <span>460 kWh · 12 sen</span>
+          <span>1000 kWh · 0</span>
+        </div>
+        <div class="badge-row" style="margin-top: 12px;">
+          <span class="badge">Drop to 450 kWh → 14.50 sen rebate, save RM1.15</span>
+          <span class="badge amber">Cross 500 kWh → rebate drops to 10.50 sen</span>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button data-jump-coach="rp4_tier_cliff" type="button">See Coach for action →</button>
+        </div>
+      </section>
+
+      <div class="section-title">Tariff Schedule</div>
+      <section class="card">
+        <div class="list-row">
+          <div>
+            <div class="row-title">Regulatory Period 4 (RP4)</div>
+            <div class="row-subtitle">Effective 1 July 2025 – 31 December 2027</div>
+          </div>
+          <div class="right-note">Active</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">AFA value this month</div>
+            <div class="row-subtitle">Updated from tnb.com.my each billing cycle</div>
+          </div>
+          <div class="right-note">+0.00 sen/kWh</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Source data</div>
+            <div class="row-subtitle">Hardcoded from TNB published schedule (no public API)</div>
+          </div>
+          <div class="right-note">View</div>
+        </div>
+        <p class="info-footnote">
+          Why not call a TNB API? TNB doesn't expose a public consumer-facing tariff endpoint. We maintain the schedule in <code>ML/insights/tnb_tariff.py</code> with full source URLs in the docstring. Refresh the AFA value each TNB billing cycle.
+        </p>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="profileTab">
+      <section class="card">
+        <div class="profile-header">
+          <div class="profile-avatar">CL</div>
+          <div>
+            <div class="profile-name">Choong Zhuo Lin</div>
+            <div class="profile-email">choongzhuolin@gmail.com</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="settings-section-label">Household</div>
+      <section class="card">
+        <div class="settings-row">
+          <span class="settings-label">Address</span>
+          <span class="settings-value">Petaling Jaya, Selangor</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Weather location</span>
+          <span class="settings-value">Kuala Lumpur</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Household size</span>
+          <span class="settings-value">4 people</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Home type</span>
+          <span class="settings-value">Double-storey terrace</span>
+        </div>
+      </section>
+
+      <div class="settings-section-label">TNB Account</div>
+      <section class="card">
+        <div class="settings-row">
+          <span class="settings-label">Account number</span>
+          <span class="settings-value">•••• 4291</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Tariff plan</span>
+          <span class="settings-value">RP4 · Standard</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Smart meter</span>
+          <span class="settings-value linked">Linked ✓</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">myTNB integration</span>
+          <span class="settings-value linked">Linked ✓</span>
+        </div>
+      </section>
+
+      <div class="settings-section-label">Coach &amp; Notifications</div>
+      <section class="card">
+        <div class="settings-row">
+          <span class="settings-label">WhatsApp number</span>
+          <span class="settings-value">•••• 8472</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Push frequency</span>
+          <span class="settings-value">Real-time + weekly digest</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Language</span>
+          <span class="settings-value">English · Manglish tone</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Quiet hours</span>
+          <span class="settings-value">23:00 – 07:00</span>
+        </div>
+      </section>
+
+      <div class="settings-section-label">Hardware</div>
+      <section class="card">
+        <div class="settings-row">
+          <span class="settings-label">WattsEye Pi</span>
+          <span class="settings-value linked">Online · 14d uptime</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Main feeder clamp</span>
+          <span class="settings-value linked">OK</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Dedicated AC clamp</span>
+          <span class="settings-value linked">OK</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">mmWave occupancy</span>
+          <span class="settings-value linked">OK</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Firmware</span>
+          <span class="settings-value">v0.4.2</span>
+        </div>
+      </section>
+
+      <div class="settings-section-label">Data</div>
+      <section class="card">
+        <div class="settings-row">
+          <span class="settings-label">Local storage</span>
+          <span class="settings-value">47 days · 312 MB</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Cloud sync</span>
+          <span class="settings-value">Last: 2 min ago</span>
+        </div>
+        <div class="settings-row action" data-profile="export">
+          <span class="settings-label">Export my data</span>
+          <span class="chev">›</span>
+        </div>
+        <div class="settings-row action danger" data-profile="clear">
+          <span class="settings-label">Clear local data</span>
+          <span class="chev">›</span>
+        </div>
+      </section>
+
+      <div class="settings-section-label">Account</div>
+      <section class="card">
+        <div class="settings-row action" data-profile="help">
+          <span class="settings-label">Help &amp; support</span>
+          <span class="chev">›</span>
+        </div>
+        <div class="settings-row action" data-profile="privacy">
+          <span class="settings-label">Privacy policy</span>
+          <span class="chev">›</span>
+        </div>
+        <div class="settings-row action danger" data-profile="signout">
+          <span class="settings-label">Sign out</span>
+          <span class="chev">›</span>
+        </div>
+      </section>
+
+      <p class="info-footnote" style="padding: 12px 4px 0; text-align: center;">
+        WattsEye v0.4.2 · Made in Malaysia
+      </p>
+    </section>
+
+  </main>
+
+  <nav class="nav five" aria-label="Main navigation">
+    <button class="active" data-tab="dashboardTab">Dashboard</button>
+    <button data-tab="coachTab">Coach</button>
+    <button data-tab="billTab">Bill</button>
+    <button data-tab="historyTab">History</button>
+    <button data-tab="profileTab">Profile</button>
+  </nav>
+
+  <div class="toast" id="toast">Saved</div>
+
+  <div class="whatsapp-modal" id="whatsappModal" role="dialog" aria-modal="true" aria-labelledby="waTitle">
+    <section class="whatsapp-window">
+      <div class="whatsapp-header">
+        <div>
+          <div class="title" id="waTitle">WattsEye Alerts</div>
+          <div class="subtitle">via WhatsApp · +60 11-XXXX 1234</div>
+        </div>
+        <button class="close-btn" id="waCloseBtn" aria-label="Close">×</button>
+      </div>
+      <div class="whatsapp-body" id="waBody"></div>
+      <div class="whatsapp-footer" id="waFooter">
+        <button class="primary" id="waReplyY" type="button">Reply Y · Turn off</button>
+        <button id="waReplyN" type="button">Reply N · Keep on</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-top">
+        <div>
+          <h3 id="modalTitle">Device</h3>
+          <div class="source" id="modalSource">Source</div>
+        </div>
+        <button id="closeModal">Close</button>
+      </div>
+
+      <div class="summary">
+        <div class="metric">
+          <div class="label">Now</div>
+          <div class="value" id="modalWatts">0W</div>
+        </div>
+        <div class="metric">
+          <div class="label">This month</div>
+          <div class="value" id="modalCost">RM0.00</div>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <h4>Usage Detail</h4>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Today</div>
+            <div class="row-subtitle" id="modalToday">Runtime and cost today</div>
+          </div>
+          <div class="right-note" id="modalTodayCost">RM0.00</div>
+        </div>
+        <div class="list-row">
+          <div>
+            <div class="row-title">Typical use</div>
+            <div class="row-subtitle" id="modalTypical">Usual time and duration</div>
+          </div>
+          <div class="right-note" id="modalTrend">Normal</div>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <h4>Insight</h4>
+        <p id="modalInsight">No insight.</p>
+        <div class="actions" id="modalActions"></div>
+      </div>
+
+      <div class="modal-section">
+        <h4>Past 7 Days</h4>
+        <div class="mini-history" id="modalHistory"></div>
+      </div>
+
+      <div class="modal-section" id="feedbackSection">
+        <h4>Feedback</h4>
+        <p id="feedbackText">Help WattsEye improve this device profile.</p>
+        <div class="actions">
+          <button class="primary" id="correctBtn">Correct</button>
+          <button id="wrongBtn">Wrong</button>
+          <button id="multipleBtn">Multiple devices</button>
+        </div>
+        <div class="input-row" id="renameRow" style="display: none;">
+          <input id="deviceNameInput" placeholder="Correct device name">
+          <button id="saveNameBtn">Save</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const devices = {
+      ac: {
+        title: 'Air Conditioner',
+        source: 'Measured · Dedicated CT clamp',
+        watts: '900W',
+        cost: 'RM43.20',
+        today: '1h 25m runtime today',
+        todayCost: 'RM1.30',
+        typical: 'Usually active 8-11 PM when occupied',
+        trend: 'High',
+        insight: 'AC has been running in an empty room for 25 minutes. Turning it off now can reduce avoidable usage at RM0.32/kWh.',
+        actions: ['Turn off', 'Keep on'],
+        history: [24, 38, 72, 55, 66, 48, 81],
+        feedback: 'Measured directly, but you can still report if this device label is wrong.'
+      },
+      kettle: {
+        title: 'Kettle',
+        source: 'Estimated · NILM',
+        watts: '0W',
+        cost: '~RM4.70',
+        today: '2 short uses today',
+        todayCost: '~RM0.25',
+        typical: 'Usually 6-8 AM, 3-5 minutes',
+        trend: 'Normal',
+        insight: 'Kettle use matches the normal morning routine. No action needed.',
+        actions: ['Mark normal'],
+        history: [12, 18, 16, 20, 14, 22, 15],
+        feedback: 'High confidence estimates hide feedback by default, but correction is still available here.'
+      },
+      fridge: {
+        title: 'Fridge',
+        source: 'Estimated · NILM',
+        watts: '118W',
+        cost: '~RM18.70',
+        today: 'Cycling across the day',
+        todayCost: '~RM0.92',
+        typical: 'Short cycles around 15-20 minutes',
+        trend: 'Watch',
+        insight: 'Fridge cycle is longer than the seeded baseline. Check if this pattern continues.',
+        actions: ['Mark normal', 'Remind later'],
+        history: [48, 50, 54, 58, 62, 70, 76],
+        feedback: 'Confirm if this looks like normal fridge behavior today.'
+      },
+      unknown: {
+        title: 'Unknown Load',
+        source: 'Possible · Profile match',
+        watts: '620W',
+        cost: '~RM15.40',
+        today: 'Active for 38 minutes',
+        todayCost: 'RM0.13',
+        typical: 'No confirmed routine yet',
+        trend: 'Learning',
+        insight: 'A 620W load started around dinner time. It may be rice cooker based on past usage.',
+        actions: ['Confirm rice cooker', 'Not this'],
+        history: [0, 12, 0, 54, 0, 60, 42],
+        feedback: 'Low-confidence identification needs user feedback.'
+      }
+    };
+
+    const backdrop = document.getElementById('modalBackdrop');
+    const title = document.getElementById('modalTitle');
+    const source = document.getElementById('modalSource');
+    const watts = document.getElementById('modalWatts');
+    const cost = document.getElementById('modalCost');
+    const insight = document.getElementById('modalInsight');
+    const actions = document.getElementById('modalActions');
+    const history = document.getElementById('modalHistory');
+    const feedbackText = document.getElementById('feedbackText');
+    const renameRow = document.getElementById('renameRow');
+    const input = document.getElementById('deviceNameInput');
+    const toast = document.getElementById('toast');
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(showToast.timeout);
+      showToast.timeout = window.setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2200);
+    }
+
+    function openDevice(key) {
+      const device = devices[key];
+      title.textContent = device.title;
+      source.textContent = device.source;
+      watts.textContent = device.watts;
+      cost.textContent = device.cost;
+      document.getElementById('modalToday').textContent = device.today;
+      document.getElementById('modalTodayCost').textContent = device.todayCost;
+      document.getElementById('modalTypical').textContent = device.typical;
+      document.getElementById('modalTrend').textContent = device.trend;
+      insight.textContent = device.insight;
+      feedbackText.textContent = device.feedback;
+
+      actions.innerHTML = '';
+      device.actions.forEach((label, index) => {
+        const button = document.createElement('button');
+        button.textContent = label;
+        if (index === 0) button.className = 'primary';
+        actions.appendChild(button);
+      });
+
+      history.innerHTML = '';
+      device.history.forEach((height) => {
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.height = `${height}%`;
+        history.appendChild(bar);
+      });
+
+      renameRow.style.display = key === 'unknown' ? 'flex' : 'none';
+      input.value = key === 'unknown' ? 'rice cooker' : '';
+      backdrop.classList.add('open');
+    }
+
+    document.querySelectorAll('[data-device]').forEach((card) => {
+      card.addEventListener('click', () => {
+        const key = card.dataset.device;
+        if (key) openDevice(key);
+      });
+    });
+
+    document.getElementById('closeModal').addEventListener('click', () => {
+      backdrop.classList.remove('open');
+    });
+
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) backdrop.classList.remove('open');
+    });
+
+    document.getElementById('wrongBtn').addEventListener('click', () => {
+      renameRow.style.display = 'flex';
+      input.focus();
+    });
+
+    document.getElementById('multipleBtn').addEventListener('click', () => {
+      feedbackText.textContent = 'Marked as multiple devices. WattsEye will keep this as an unknown load group for now.';
+      renameRow.style.display = 'none';
+      showToast('Saved as multiple-device unknown load');
+    });
+
+    document.getElementById('correctBtn').addEventListener('click', () => {
+      feedbackText.textContent = 'Marked correct. Future similar events will be treated with higher confidence.';
+      showToast('Feedback saved');
+    });
+
+    document.getElementById('saveNameBtn').addEventListener('click', () => {
+      const name = input.value.trim() || 'custom device';
+      feedbackText.textContent = `Saved as ${name}. This becomes part of the household appliance profile.`;
+      renameRow.style.display = 'none';
+      devices.unknown.title = name.replace(/\b\w/g, (letter) => letter.toUpperCase());
+      devices.unknown.source = 'User labeled · Household profile';
+      document.getElementById('unknownTitle').textContent = devices.unknown.title;
+      document.getElementById('unknownSource').textContent = devices.unknown.source;
+      document.getElementById('unknownBadges').innerHTML = '<span class="badge green">Confirmed by user</span><span class="badge">Profile saved</span>';
+      showToast(`Saved as ${name}`);
+    });
+
+    document.querySelectorAll('.nav button').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.nav button').forEach((item) => item.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.remove('active'));
+        button.classList.add('active');
+        document.getElementById(button.dataset.tab).classList.add('active');
+      });
+    });
+
+    function confirmAcTurnedOff(via) {
+      document.getElementById('acWatts').textContent = '0W';
+      document.getElementById('acBadges').innerHTML = '<span class="badge green">Turned off</span><span class="badge">Saved RM0.12 today</span>';
+      const suffix = via === 'whatsapp'
+        ? 'WhatsApp reply received. ESP32 fired IR signal. Dedicated CT clamp now reads 0W.'
+        : 'AC turn-off command sent. Dedicated CT clamp should confirm the drop to 0W.';
+      document.getElementById('priorityAlertText').textContent = suffix;
+    }
+
+    document.querySelectorAll('[data-action]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (button.dataset.action === 'turn-off-ac') {
+          confirmAcTurnedOff('in-app');
+          showToast('AC turn-off command sent');
+        }
+        if (button.dataset.action === 'whatsapp-ac') {
+          openWhatsApp();
+        }
+        if (button.dataset.action === 'keep-ac') {
+          document.getElementById('priorityAlertText').textContent = 'Marked as intentional. WattsEye will lower this alert for the current session.';
+          showToast('Marked as intentional');
+        }
+      });
+    });
+
+    // --- Login flow ---
+    const authScreen = document.getElementById('authScreen');
+    const authForm = document.getElementById('authForm');
+    const demoSkip = document.getElementById('demoSkip');
+    const userEmailEl = document.getElementById('userEmail');
+    const dataSourcePill = document.getElementById('dataSourcePill');
+    const signoutBtn = document.getElementById('signoutBtn');
+
+    function signIn(email, isDemo) {
+      userEmailEl.textContent = email;
+      dataSourcePill.textContent = isDemo ? 'Demo mode · Sample data' : 'Live local · Home Pi';
+      authScreen.classList.add('hidden');
+      showToast(isDemo ? 'Continuing as demo' : `Signed in as ${email}`);
+    }
+
+    authForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = document.getElementById('emailInput').value.trim() || 'demo@wattseye.local';
+      signIn(email, false);
+    });
+
+    demoSkip.addEventListener('click', () => {
+      signIn('demo@wattseye.local', true);
+    });
+
+    signoutBtn.addEventListener('click', () => {
+      authScreen.classList.remove('hidden');
+      showToast('Signed out');
+    });
+
+    // --- WhatsApp simulation ---
+    const waModal = document.getElementById('whatsappModal');
+    const waBody = document.getElementById('waBody');
+    const waFooter = document.getElementById('waFooter');
+    const waReplyY = document.getElementById('waReplyY');
+    const waReplyN = document.getElementById('waReplyN');
+    const waCloseBtn = document.getElementById('waCloseBtn');
+
+    function nowTime() {
+      const d = new Date();
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      return `${h}:${m}`;
+    }
+
+    function addWaBubble(side, text) {
+      const bubble = document.createElement('div');
+      bubble.className = `wa-bubble ${side}`;
+      bubble.innerHTML = `<div>${text}</div><div class="meta"><span></span><span>${nowTime()}</span></div>`;
+      waBody.appendChild(bubble);
+      waBody.scrollTop = waBody.scrollHeight;
+      return bubble;
+    }
+
+    function openWhatsApp() {
+      waBody.innerHTML = '';
+      waFooter.style.display = 'flex';
+      addWaBubble('in', '<b>WattsEye alert</b><br>AC is running in an empty room (25 minutes, 900W). Estimated avoidable cost RM0.12 so far at RM0.32/kWh.<br><br>Reply <b>Y</b> to turn off, <b>N</b> to keep on.');
+      waModal.classList.add('open');
+    }
+
+    function closeWhatsApp() {
+      waModal.classList.remove('open');
+    }
+
+    waCloseBtn.addEventListener('click', closeWhatsApp);
+    waModal.addEventListener('click', (e) => { if (e.target === waModal) closeWhatsApp(); });
+
+    waReplyY.addEventListener('click', () => {
+      addWaBubble('out', 'Y');
+      waFooter.style.display = 'none';
+      setTimeout(() => addWaBubble('in', 'Got it. Sending IR off command to your AC...'), 600);
+      setTimeout(() => {
+        addWaBubble('in', '<b>AC turned off.</b><br>Dedicated CT clamp now reads 0W. You saved about RM0.12 today and around RM3.50/month if this repeats daily.');
+        confirmAcTurnedOff('whatsapp');
+      }, 1700);
+    });
+
+    waReplyN.addEventListener('click', () => {
+      addWaBubble('out', 'N');
+      waFooter.style.display = 'none';
+      setTimeout(() => addWaBubble('in', 'Noted. WattsEye will lower the priority of this alert for the current session.'), 600);
+      document.getElementById('priorityAlertText').textContent = 'Marked as intentional via WhatsApp. WattsEye will lower this alert for the current session.';
+    });
+
+    // --- Bill page interactions ---
+    const switchTariffBtn = document.getElementById('switchTariffBtn');
+    const learnTouBtn = document.getElementById('learnTouBtn');
+    const tariffLabel = document.getElementById('activeTariffLabel');
+    const projectedTotal = document.getElementById('projectedTotal');
+    const projectedTotalSub = document.getElementById('projectedTotalSub');
+    let touActive = false;
+
+    switchTariffBtn.addEventListener('click', () => {
+      touActive = !touActive;
+      if (touActive) {
+        tariffLabel.textContent = 'TNB RP4 · Previewing ToU';
+        projectedTotal.textContent = 'RM143.80';
+        projectedTotalSub.textContent = '460 kWh projected · 31.26 sen/kWh effective';
+        switchTariffBtn.textContent = 'Preview bill as Standard';
+        showToast('Previewing as ToU — display only. Apply via Coach.');
+      } else {
+        tariffLabel.textContent = 'TNB RP4 · Standard';
+        projectedTotal.textContent = 'RM149.18';
+        projectedTotalSub.textContent = '460 kWh projected · 32.43 sen/kWh effective';
+        switchTariffBtn.textContent = 'Preview bill as ToU';
+      }
+    });
+
+    // Jump from Bill tab to a specific Coach card
+    document.querySelectorAll('[data-jump-coach]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetKey = btn.dataset.jumpCoach;
+        document.querySelectorAll('.nav button').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+        document.querySelector('[data-tab="coachTab"]').classList.add('active');
+        document.getElementById('coachTab').classList.add('active');
+        // scroll to the matching card
+        const card = document.querySelector(`.rec-card[data-key="${targetKey}"]`);
+        if (card) {
+          card.scrollIntoView({behavior: 'smooth', block: 'center'});
+          card.style.transition = 'background-color .6s ease';
+          const prevBg = card.style.backgroundColor;
+          card.style.backgroundColor = '#fff7d6';
+          setTimeout(() => { card.style.backgroundColor = prevBg; }, 1400);
+        }
+      });
+    });
+
+    // --- Routine tab: heatmap + per-appliance hour tracks ---
+    const HEAT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    // 7 days x 24 hours, K-Means phase labels from kmeans_phases.joblib.
+    // S=sleep, M=morning, A=midday_away, E=evening. Mirrors the model output
+    // printed when ML/routine/kmeans_phases.py --train is run.
+    const HEAT_MAP = [
+      // 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+      ['S','S','S','S','S','S','S','S','S','A','A','A','A','A','A','A','A','A','E','E','E','E','E','E'], // Mon
+      ['S','S','S','S','S','S','S','S','S','A','A','A','A','A','A','A','A','A','E','E','E','E','E','E'], // Tue
+      ['S','S','S','S','S','S','S','S','S','A','A','A','A','A','A','A','A','A','E','E','E','E','E','E'], // Wed
+      ['S','S','S','S','S','S','S','S','S','A','A','A','A','A','A','A','A','A','E','E','E','E','E','E'], // Thu
+      ['S','S','S','S','S','S','S','S','S','A','A','A','A','A','A','A','A','A','E','E','E','E','E','E'], // Fri
+      ['M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','E','E','E','E','E','E'], // Sat
+      ['M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','M','E','E','E','E','E'], // Sun
+    ];
+
+    const PHASE_CLASS = {S: 'phase-sleep', M: 'phase-morning', A: 'phase-midday', E: 'phase-evening'};
+
+    function buildHeatmap() {
+      const grid = document.getElementById('heatGrid');
+      if (!grid) return;
+      grid.innerHTML = '';
+      HEAT_DAYS.forEach((day, dayIdx) => {
+        const label = document.createElement('div');
+        label.className = 'heat-day';
+        label.textContent = day;
+        grid.appendChild(label);
+        for (let hour = 0; hour < 24; hour++) {
+          const cell = document.createElement('div');
+          const phaseCode = HEAT_MAP[dayIdx][hour];
+          cell.className = `heat-cell ${PHASE_CLASS[phaseCode] || ''}`;
+          cell.title = phaseCode;
+          grid.appendChild(cell);
+        }
+      });
+    }
+
+    function buildHourTracks() {
+      document.querySelectorAll('.hour-track[data-hours]').forEach((track) => {
+        const activeHours = new Set(track.dataset.hours.split(',').map(Number));
+        track.innerHTML = '';
+        for (let h = 0; h < 24; h++) {
+          const cell = document.createElement('div');
+          cell.className = activeHours.has(h) ? 'hour-cell active' : 'hour-cell';
+          track.appendChild(cell);
+        }
+      });
+    }
+
+    buildHeatmap();
+    buildHourTracks();
+
+    // --- Coach v2: 12 archetype cards (mock data derived from coach_engine output) ---
+    // These mirror ML/insights/coach/coach_engine._demo_snapshot(). When the engine is
+    // wired to a backend the cards will come from generate_cards() instead of this array.
+    const COACH_CARDS = [
+      {
+        id: 1, key: 'left_on_empty', family: 'waste', severity: 'high',
+        headline: 'AC running in empty room',
+        impact: 'AC ran 71 min after the room emptied at 14:19. At your current pattern (4×/week), this costs about RM 10/month.',
+        action: 'Enable auto-off after 20 min empty.', saving: 'RM 10/month', effort: 'Low effort',
+        confidence: 'High confidence', rmMonthly: 9.85,
+        why: [
+          'Occupancy: Room empty since 14:19 (71 min).',
+          'NILM: AC drawing 1,200W.',
+          'K-Means phase: work (14:00–17:00).',
+          'Routine baseline: AC normally OFF during work phase (observed 14/14 weekdays).',
+        ],
+        math: [
+          '1,200W × 71 min ÷ 60 = 1.42 kWh wasted this event',
+          'Event cost via TNB RP4 marginal pricing: RM 0.57',
+          'Weekly frequency 4 × 4.345 weeks/month → RM 9.85/month',
+        ],
+      },
+      {
+        id: 2, key: 'phantom_standby', family: 'waste', severity: 'medium',
+        headline: 'Phantom standby load detected',
+        impact: 'Your home draws 48W continuously overnight from devices on standby — about RM 6/month.',
+        action: 'Unplug TV/router/charger clusters or use a switched power strip overnight.',
+        saving: 'RM 6/month', effort: 'Low effort', confidence: 'High confidence', rmMonthly: 6.20,
+        why: [
+          'NILM minimum-window: Overnight base load: 48W (when household asleep).',
+          'Routine baseline: Sleep phase identified by K-Means; no high-draw appliances expected.',
+        ],
+        math: [
+          '48W × 24h × 30 days ÷ 1000 = 34.6 kWh/month',
+          'At TNB RP4 marginal rate → RM 6.20/month',
+        ],
+      },
+      {
+        id: 5, key: 'rp4_tier_cliff', family: 'tariff', severity: 'medium',
+        headline: 'Approaching 1,500 kWh tariff cliff',
+        impact: 'Projected 1,480 kWh — within 20 kWh of the high-band cliff. Crossing raises generation rate from 27.03 to 37.03 sen/kWh on every unit above.',
+        action: 'Trim 25 kWh by month-end (≈1.5 hours less AC/day) to stay in lower tier.',
+        saving: 'RM 3/month', effort: 'Low effort', confidence: 'High confidence', rmMonthly: 3.00,
+        why: [
+          'Cost engine: Projected month-end: 1,480 kWh.',
+          'TNB RP4 schedule: Crossing 1,500 kWh raises generation rate from 27.03 to 37.03 sen/kWh on every unit.',
+        ],
+        math: [
+          'Generation rate jumps from 27.03 sen/kWh → 37.03 sen/kWh at 1,500 kWh',
+          'Estimated savings if you stay below: RM 3.00',
+        ],
+      },
+      {
+        id: 4, key: 'tou_switch', family: 'tariff', severity: 'medium',
+        headline: 'You may save by switching to TNB ToU tariff',
+        impact: '68% of your last 30 days fell in off-peak hours. Switching to ToU could save ~RM 12/month.',
+        action: 'Apply for ToU tariff via myTNB app (one-time opt-in).',
+        saving: 'RM 12/month', effort: 'Low effort', confidence: 'High confidence', rmMonthly: 12.40,
+        why: [
+          'Routine engine: 68% of your last 30 days of usage fell in off-peak hours.',
+          'TNB tariff calc: ToU off-peak rate is 17.55 sen/kWh lower than peak.',
+        ],
+        math: [
+          'Standard tariff projected bill: RM 612/month',
+          'ToU tariff projected bill:      RM 600/month',
+          'Difference:                     RM 12/month',
+        ],
+      },
+      {
+        id: 7, key: 'bill_trending_high', family: 'forecast', severity: 'high',
+        headline: 'Bill trending high this month',
+        impact: 'On track for RM 612 this month (+25% vs your usual RM 489). Main driver: AC usage.',
+        action: 'Raise AC setpoint by 1–2°C and reduce kettle pre-heating to save about RM 19 this month.',
+        saving: 'RM 19/month', effort: 'Medium effort', confidence: 'High confidence', rmMonthly: 18.80,
+        why: [
+          'Cost engine: Projection 1,480 kWh (+25% vs 3-month average of 1,180 kWh).',
+          'NILM attribution: Main driver: AC usage.',
+        ],
+        math: [
+          'Projected: 1,480 kWh → RM 612 (TNB RP4)',
+          'Baseline (3-mo avg): 1,180 kWh → RM 489',
+          'Overage: RM 19',
+        ],
+      },
+      {
+        id: 12, key: 'inefficient_upgrade', family: 'capital', severity: 'low',
+        headline: 'Fridge runs inefficiently — upgrade pays back',
+        impact: 'Your fridge draws 180W continuous. 5-star class average is 90W. A more efficient model saves ~RM 230/year.',
+        action: 'Compare 5-star models on the ST efficiency registry — estimated payback 7.8 years on a RM 1,800 replacement.',
+        saving: 'RM 19/month', effort: 'High effort', confidence: 'High confidence', rmMonthly: 19.00,
+        why: [
+          'NILM steady-state: Fridge draws 180W continuous (idle).',
+          'ST efficiency registry: 5-star class average for same size: 90W.',
+        ],
+        math: [
+          'Δ 90W × 24h × 30 days = 64.8 kWh/month extra',
+          '× TNB RP4 marginal rate = RM 19/month',
+          '× 12 months = RM 230/year',
+          'Payback: RM 1,800 ÷ RM 230/year = 7.8 years',
+        ],
+      },
+      {
+        id: 3, key: 'simultaneous_peak_load', family: 'waste', severity: 'medium',
+        headline: 'Heavy simultaneous use in peak window',
+        impact: 'Kettle, microwave, AC ran together yesterday at 19:34 (3,200W combined). Staggering could save ~RM 4/month.',
+        action: 'Delay non-urgent loads (kettle, microwave) to off-peak (after 22:00 weekdays).',
+        saving: 'RM 4/month', effort: 'Low effort', confidence: 'Medium confidence', rmMonthly: 4.20,
+        why: [
+          'NILM: 3 appliances active simultaneously: kettle, microwave, AC (3,200W total).',
+          'ToU schedule: Currently in TNB peak window (14:00–22:00 weekdays).',
+        ],
+        math: [
+          'Estimated 30% of combined load shifted off-peak',
+          'Saving = shifted kWh × (peak rate − off-peak rate) ≈ RM 4.20/month',
+        ],
+      },
+      {
+        id: 6, key: 'peak_window_shift', family: 'tariff', severity: 'medium',
+        headline: 'Shift schedulable loads to off-peak',
+        impact: 'Dishwasher, washer ran 4 times in TNB peak window over the last 14 days. Shifting to after 22:00 saves ~RM 5/month.',
+        action: 'Set a delay-start timer on dishwasher for after 22:00 weekdays.',
+        saving: 'RM 5/month', effort: 'Low effort', confidence: 'High confidence', rmMonthly: 5.30,
+        why: [
+          'NILM: 4 schedulable runs in peak window over last 14 days (dishwasher, washer).',
+          'ToU schedule: Shifting these to after 22:00 would charge at off-peak rate.',
+        ],
+        math: [
+          'Peak kWh over 14 days × 4.345/2 = monthly shiftable kWh',
+          '× (peak rate − off-peak rate) → RM 5.30/month',
+        ],
+      },
+      {
+        id: 8, key: 'comparative_regression', family: 'forecast', severity: 'medium',
+        headline: 'AC using more energy this week',
+        impact: 'AC used 38% more this week vs the same week last month. At this rate, monthly cost is up ~RM 11.',
+        action: 'Check AC settings — try +1°C setpoint, look for window/door left open.',
+        saving: 'RM 11/month', effort: 'Medium effort', confidence: 'High confidence', rmMonthly: 11.00,
+        why: [
+          'NILM: AC used 28.4 kWh this week vs 20.5 kWh same week last month (+38%).',
+          'Routine engine: External conditions (weather, calendar) appear similar — likely usage pattern change.',
+        ],
+        math: [
+          'This week: 28.4 kWh',
+          'Same week last month: 20.5 kWh',
+          'Δ × 4.345 weeks → RM 11/month at TNB RP4 marginal rate',
+        ],
+      },
+      {
+        id: 9, key: 'routine_shift', family: 'forecast', severity: 'low',
+        headline: 'Your daily routine has shifted',
+        impact: 'K-Means detects your evening phase has moved 75 min later over the past 3 weeks. Old AC schedule may waste ~RM 5/month.',
+        action: 'Adjust AC scheduler by ~75 min later.',
+        saving: 'RM 5/month', effort: 'Low effort', confidence: 'Medium confidence', rmMonthly: 4.80,
+        why: [
+          'K-Means clustering: evening phase boundary has drifted 75 min later over the past 3 weeks.',
+          'Routine engine: Scheduled appliances (AC, water heater) may still follow the old timing.',
+        ],
+        math: [
+          'Estimated 30 min of misaligned AC × 30 days = ~0.9 kWh/day × 30 days',
+          'At TNB RP4 marginal rate → RM 4.80/month',
+        ],
+      },
+      {
+        id: 10, key: 'weather_correlated_ac', family: 'context', severity: 'low',
+        headline: 'Hot week ahead — pre-cool to save',
+        impact: '3 hot days (>33°C) forecast in the next 7 days from Open-Meteo. Your AC usage rises ~45% on hot days. Pre-cooling could save ~RM 2.',
+        action: 'Pre-cool 30 min before peak window (14:00) on forecast hot days.',
+        saving: 'RM 2/week', effort: 'Low effort', confidence: 'Medium confidence', rmMonthly: 2.10,
+        why: [
+          'Open-Meteo forecast: 3 day(s) forecast above 33°C in next 7 days (Kuala Lumpur).',
+          'Routine engine (learned): Your AC usage rises ~45% on hot days.',
+        ],
+        math: [
+          'Estimated 1 kWh/hot-day shifted from peak to off-peak',
+          '× 3 hot days × (peak − off-peak rate) → RM 2.10',
+        ],
+      },
+      {
+        id: 11, key: 'anomaly_with_action', family: 'context', severity: 'medium',
+        headline: 'Unusual water heater activity at 02:14',
+        impact: 'Water heater ran at 02:14 — outside your normal pattern. If this is unintended and continues, ~RM 23/month wasted.',
+        action: 'Check water heater timer settings. Confirm or dismiss this card.',
+        saving: 'RM 23/month', effort: 'Low effort', confidence: 'Medium confidence', rmMonthly: 23.00,
+        why: [
+          'Isolation Forest: Event scored −0.42 — outside learned baseline for this appliance.',
+          'Routine engine: Water heater normally inactive at 02:00.',
+        ],
+        math: [
+          'Event: 2,400W × 35 min',
+          'If repeats 4×/month → RM 23/month',
+        ],
+      },
+    ];
+
+    function tag(label, cls) {
+      return `<span class="tag ${cls}">${label}</span>`;
+    }
+
+    function renderCoachCard(card) {
+      const tags = [
+        tag(card.family, `fam-${card.family}`),
+        tag(card.severity, `sev-${card.severity}`),
+      ].join('');
+      const whyHtml = card.why.map((line) => {
+        const [src, rest] = line.split(/:(.+)/);
+        return `<li><b>${src}:</b>${rest || ''}</li>`;
+      }).join('');
+      const mathHtml = card.math.map((line) => `<li><code>${line}</code></li>`).join('');
+      return `
+        <section class="card rec-card" data-family="${card.family}" data-key="${card.key}">
+          <div class="rec-head">
+            <div class="rec-title">#${card.id} · ${card.headline}</div>
+            <div class="rec-tags">${tags}</div>
+          </div>
+          <div class="rec-impact">${card.impact}</div>
+          <div class="rec-action">
+            <div class="rec-action-label">Try this</div>
+            <div class="rec-action-text">${card.action}</div>
+            <div class="rec-meta">
+              <span class="saving">${card.saving}</span>
+              <span>${card.effort} · ${card.confidence}</span>
+            </div>
+          </div>
+          <div class="rec-buttons">
+            <button class="primary" data-rec-action="do">Do this</button>
+            <button data-rec-action="remind">Remind me</button>
+            <button data-rec-action="dismiss">Not useful</button>
+          </div>
+          <div class="rec-expand" tabindex="0" aria-expanded="false" data-toggle="why">Why this appeared</div>
+          <div class="rec-detail">
+            <p class="rec-detail-title">Detection chain</p>
+            <ul>${whyHtml}</ul>
+          </div>
+          <div class="rec-expand" tabindex="0" aria-expanded="false" data-toggle="math">How we calculated this</div>
+          <div class="rec-detail">
+            <p class="rec-detail-title">Math (TNB RP4)</p>
+            <ul>${mathHtml}</ul>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderCoach() {
+      const surfaced = COACH_CARDS.slice(0, 2);
+      const secondary = COACH_CARDS.slice(2);
+      const surfHtml = surfaced.map(renderCoachCard).join('');
+      const secHtml = secondary.map(renderCoachCard).join('');
+      document.getElementById('coachSurfaced').innerHTML = surfHtml;
+      document.getElementById('coachSecondary').innerHTML = secHtml;
+      const total = COACH_CARDS.reduce((s, c) => s + c.rmMonthly, 0);
+      document.getElementById('coachPotential').textContent = `RM${total.toFixed(0)}`;
+      document.getElementById('coachActiveCount').textContent = COACH_CARDS.length;
+
+      // expand/collapse
+      document.querySelectorAll('.rec-expand').forEach((el) => {
+        el.addEventListener('click', () => {
+          const open = el.getAttribute('aria-expanded') === 'true';
+          el.setAttribute('aria-expanded', open ? 'false' : 'true');
+        });
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+        });
+      });
+
+      // action buttons
+      document.querySelectorAll('[data-rec-action]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const action = btn.dataset.recAction;
+          const card = btn.closest('.rec-card');
+          const key = card.dataset.key;
+          if (action === 'do') {
+            card.classList.add('acted');
+            showToast(`Action saved for "${key}". Ranker will track outcome.`);
+          } else if (action === 'remind') {
+            showToast('Reminder set for tomorrow.');
+          } else if (action === 'dismiss') {
+            card.classList.add('dismissed');
+            showToast('Dismissed. Ranker will suppress similar cards for 7 days.');
+          }
+        });
+      });
+    }
+
+    renderCoach();
+
+    // --- Coach extras (weekly digest + PDF) ---
+    document.querySelectorAll('[data-coach-extra]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.coachExtra;
+        if (action === 'digest') {
+          showToast('Weekly digest sent to WhatsApp — check your phone.');
+        } else if (action === 'pdf') {
+          showToast('PDF generated: wattseye_report.pdf');
+        }
+      });
+    });
+
+    // --- Profile tap-through stubs (no-op toasts; placeholder for backend wiring) ---
+    document.querySelectorAll('[data-profile]').forEach((row) => {
+      row.addEventListener('click', () => {
+        const action = row.dataset.profile;
+        const labels = {
+          export: 'Data export queued — link will be sent to email.',
+          clear: 'Clear local data not available in demo.',
+          help: 'Help centre opens in browser.',
+          privacy: 'Privacy policy opens in browser.',
+          signout: 'Sign out not available in demo.',
+        };
+        showToast(labels[action] || 'Action');
+      });
+    });
+  </script>
+</body>
+</html>
