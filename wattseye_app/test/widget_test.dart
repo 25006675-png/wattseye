@@ -5,7 +5,7 @@ void main() {
   testWidgets('shows WattsEye dashboard smoke test', (tester) async {
     await tester.pumpWidget(const WattsEyeApp());
 
-    expect(find.text('WattsEye'), findsOneWidget);
+    expect(find.text('Dashboard'), findsWidgets);
     expect(find.text('Current power'), findsOneWidget);
     expect(find.text('Coach'), findsOneWidget);
   });

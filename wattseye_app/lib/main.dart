@@ -390,6 +390,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    const titles = ['Dashboard', 'Coach', 'Bill', 'History', 'Profile'];
     final pages = [
       DashboardPage(onOpenCoach: _openCoachCard),
       CoachPage(
@@ -407,7 +408,18 @@ class _HomeShellState extends State<HomeShell> {
     ];
 
     return Scaffold(
-      body: SafeArea(child: pages[_selectedIndex]),
+      appBar: AppBar(
+        title: Text(titles[_selectedIndex]),
+        actions: const [
+          Padding(
+            padding: EdgeInsets.only(right: 16),
+            child: Center(
+              child: ChipLabel(text: 'Live Pi', color: AppTheme.green),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(top: false, child: pages[_selectedIndex]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
@@ -457,11 +469,8 @@ class DashboardPage extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          const PageHeader(
-            title: 'WattsEye',
-            subtitle: 'Live from home Pi - synced 2 min ago',
-          ),
-          const SizedBox(height: 16),
+          const PageHeader(subtitle: 'Live from home Pi - synced 2 min ago'),
+          const SizedBox(height: 12),
           const LivePowerCard(),
           const SizedBox(height: 12),
           const MetricGrid(
@@ -663,11 +672,10 @@ class CoachPage extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           PageHeader(
-            title: 'Coach',
             subtitle:
                 '${cards.length} active insights - Potential RM $potential/month - Already saved RM 2.72',
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -858,10 +866,9 @@ class BillPage extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           const PageHeader(
-            title: 'Bill',
             subtitle: 'TNB RP4 projection from current household pattern',
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           InfoCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1095,11 +1102,8 @@ class HistoryPage extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: const [
-          PageHeader(
-            title: 'History',
-            subtitle: 'Bill trend, appliance cost, and waste history',
-          ),
-          SizedBox(height: 16),
+          PageHeader(subtitle: 'Bill trend, appliance cost, and waste history'),
+          SizedBox(height: 12),
           InfoCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1192,10 +1196,9 @@ class ProfilePage extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
         const PageHeader(
-          title: 'Profile',
           subtitle: 'Account, household, hardware, and data settings',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         const InfoCard(
           child: Row(
             children: [
@@ -1328,29 +1331,90 @@ class ProfilePage extends StatelessWidget {
 }
 
 class PageHeader extends StatelessWidget {
-  const PageHeader({super.key, required this.title, required this.subtitle});
+  const PageHeader({super.key, required this.subtitle});
 
-  final String title;
   final String subtitle;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 4),
-              Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-            ],
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.sensors_outlined, size: 18, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class SheetSection extends StatelessWidget {
+  const SheetSection({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.surface,
+      borderRadius: BorderRadius.circular(8),
+      child: Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i != children.length - 1)
+              const Divider(indent: 16, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class NativeListTile extends StatelessWidget {
+  const NativeListTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.trailing,
+    this.color = AppTheme.primary,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String trailing;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 19,
+        backgroundColor: color.withValues(alpha: 0.12),
+        child: Icon(icon, color: color, size: 20),
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+      subtitle: Text(subtitle),
+      trailing: Text(
+        trailing,
+        textAlign: TextAlign.right,
+        style: const TextStyle(
+          fontWeight: FontWeight.w700,
+          color: AppTheme.text,
         ),
-        const SizedBox(width: 12),
-        const ChipLabel(text: 'Live local', color: AppTheme.green),
-      ],
+      ),
     );
   }
 }
@@ -1380,9 +1444,9 @@ class InfoCard extends StatelessWidget {
             : Border(left: BorderSide(color: accentColor!, width: 4)),
         boxShadow: [
           BoxShadow(
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+            color: Colors.black.withValues(alpha: 0.04),
           ),
         ],
       ),
