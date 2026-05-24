@@ -6,6 +6,13 @@ This starts the local HTTP API consumed by the Flutter app.
 python backend/api_server.py
 ```
 
+Install backend dependencies first if PDF or ML endpoints report missing
+packages:
+
+```powershell
+python -m pip install -r backend/requirements.txt
+```
+
 Default URL:
 
 ```text
@@ -17,6 +24,11 @@ Implemented endpoints:
 - `GET /api/dashboard`
 - `GET /api/coach/cards`
 - `POST /api/coach/cards/{archetype_key}/action`
+- `GET /api/integrations/status`
+- `GET /api/weather?city=Kuala%20Lumpur`
+- `GET /api/ml/status`
+- `POST /api/ml/nilm/infer`
+- `GET /api/report/monthly?mode=summary`
 - `GET /api/whatsapp/status`
 - `POST /api/whatsapp/send`
 - `GET /api/bill`
@@ -26,6 +38,45 @@ The bridge currently uses the existing demo snapshot and coach engine from
 `ML/insights/coach/coach_engine.py`. Replace `dashboard_payload()` with live Pi
 sensor/database data when the hardware pipeline is ready; keep the JSON keys the
 same so the Flutter app continues to work.
+
+## PDF, Weather, And ML
+
+The Profile tab reads:
+
+```text
+GET /api/integrations/status
+```
+
+This reports whether PDF generation, Open-Meteo weather, NILM `.pth` models,
+PyTorch, and `.joblib` models are available.
+
+Generate a monthly PDF:
+
+```powershell
+Invoke-WebRequest -Uri "http://localhost:8080/api/report/monthly?mode=detailed" `
+  -OutFile wattseye_report_detailed.pdf
+```
+
+Fetch weather:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/weather?city=Kuala%20Lumpur"
+```
+
+Check ML model files/runtime:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/ml/status"
+```
+
+Run NILM inference on a synthetic 240-sample window:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/ml/nilm/infer" `
+  -Method Post `
+  -ContentType application/json `
+  -Body '{"models":"all"}'
+```
 
 Run Flutter against another backend host:
 

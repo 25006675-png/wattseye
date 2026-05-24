@@ -34,6 +34,11 @@ class WattsEyeApi {
         .toList();
   }
 
+  Future<IntegrationStatus> getIntegrationStatus() async {
+    final response = await _get('/api/integrations/status');
+    return IntegrationStatus.fromJson(_decodeMap(response.body));
+  }
+
   Future<void> markCoachAction(String archetypeKey, String action) async {
     final response = await _client.post(
       Uri.parse('$baseUrl/api/coach/cards/$archetypeKey/action'),
@@ -103,6 +108,35 @@ class WhatsAppSendResult {
   }
 }
 
+class IntegrationStatus {
+  const IntegrationStatus({
+    required this.pdfAvailable,
+    required this.weatherAvailable,
+    required this.nilmModelCount,
+    required this.torchAvailable,
+    required this.joblibModelCount,
+  });
+
+  final bool pdfAvailable;
+  final bool weatherAvailable;
+  final int nilmModelCount;
+  final bool torchAvailable;
+  final int joblibModelCount;
+
+  factory IntegrationStatus.fromJson(Map<String, dynamic> json) {
+    final pdf = Map<String, dynamic>.from(json['pdf'] as Map? ?? {});
+    final weather = Map<String, dynamic>.from(json['weather'] as Map? ?? {});
+    final ml = Map<String, dynamic>.from(json['ml'] as Map? ?? {});
+    return IntegrationStatus(
+      pdfAvailable: pdf['available'] == true,
+      weatherAvailable: weather['available'] == true,
+      nilmModelCount: _int(ml['nilm_model_count']),
+      torchAvailable: ml['torch_available'] == true,
+      joblibModelCount: _int(ml['joblib_model_count']),
+    );
+  }
+}
+
 class DashboardSnapshot {
   const DashboardSnapshot({
     required this.timestamp,
@@ -162,4 +196,10 @@ class ActiveAppliance {
 double _number(Object? value) {
   if (value is num) return value.toDouble();
   return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+int _int(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
 }

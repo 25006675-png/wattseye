@@ -357,6 +357,7 @@ class _HomeShellState extends State<HomeShell> {
   bool _touPreview = false;
   late List<CoachCardState> _cards;
   DashboardSnapshot? _dashboard;
+  IntegrationStatus? _integrations;
   bool _backendOnline = false;
   String _connectionLabel = 'Demo data';
 
@@ -372,13 +373,16 @@ class _HomeShellState extends State<HomeShell> {
       final results = await Future.wait<Object>([
         _api.getDashboard(),
         _api.getCoachCards(),
+        _api.getIntegrationStatus(),
       ]);
       final dashboard = results[0] as DashboardSnapshot;
       final coachCards = results[1] as List<Map<String, dynamic>>;
+      final integrations = results[2] as IntegrationStatus;
       if (!mounted) return;
       setState(() {
         _dashboard = dashboard;
         _cards = coachCards.map(_coachCardFromApi).toList();
+        _integrations = integrations;
         _backendOnline = true;
         _connectionLabel = 'Live Pi';
       });
@@ -473,7 +477,7 @@ class _HomeShellState extends State<HomeShell> {
         onOpenCoach: _openCoachCard,
       ),
       const HistoryPage(),
-      const ProfilePage(),
+      ProfilePage(integrations: _integrations, backendOnline: _backendOnline),
     ];
 
     return Scaffold(
@@ -1266,10 +1270,18 @@ class HistoryPage extends StatelessWidget {
 }
 
 class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+  const ProfilePage({
+    super.key,
+    required this.integrations,
+    required this.backendOnline,
+  });
+
+  final IntegrationStatus? integrations;
+  final bool backendOnline;
 
   @override
   Widget build(BuildContext context) {
+    final status = integrations;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
@@ -1321,6 +1333,39 @@ class ProfilePage extends StatelessWidget {
             SettingsRow(label: 'Weather location', value: 'Kuala Lumpur'),
             SettingsRow(label: 'Household size', value: '4 people'),
             SettingsRow(label: 'Home type', value: 'Double-storey terrace'),
+          ],
+        ),
+        ProfileSection(
+          title: 'Backend integrations',
+          rows: [
+            SettingsRow(
+              label: 'API bridge',
+              value: backendOnline ? 'Connected' : 'Offline',
+            ),
+            SettingsRow(
+              label: 'Monthly PDF report',
+              value: _readyLabel(status?.pdfAvailable),
+            ),
+            SettingsRow(
+              label: 'Open-Meteo weather',
+              value: _readyLabel(status?.weatherAvailable),
+            ),
+            SettingsRow(
+              label: 'NILM .pth models',
+              value: status == null
+                  ? 'Unknown'
+                  : '${status.nilmModelCount} found',
+            ),
+            SettingsRow(
+              label: 'PyTorch runtime',
+              value: _readyLabel(status?.torchAvailable),
+            ),
+            SettingsRow(
+              label: 'Joblib ML models',
+              value: status == null
+                  ? 'Unknown'
+                  : '${status.joblibModelCount} found',
+            ),
           ],
         ),
         const ProfileSection(
@@ -2280,6 +2325,14 @@ String _timeLabel(DateTime? timestamp) {
 }
 
 String _apiBaseLabel() => defaultApiBaseUrl;
+
+String _readyLabel(bool? ready) {
+  return switch (ready) {
+    true => 'Ready',
+    false => 'Missing',
+    null => 'Unknown',
+  };
+}
 
 IconData _applianceIcon(String name) {
   return switch (name.toLowerCase()) {

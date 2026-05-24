@@ -11,6 +11,7 @@ keeps the same JSON contract documented in extra_info/FRONTEND_BRIEF.md.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from http import HTTPStatus
@@ -18,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -59,7 +60,7 @@ def dashboard_payload() -> dict[str, Any]:
 
 
 def coach_cards_payload() -> list[dict[str, Any]]:
-    cards = generate_cards(_demo_snapshot(), surface_count=2, include_weather=False)
+    cards = _coach_cards()
     payload = cards_to_json(cards)
     for card in payload:
         action = USER_ACTIONS.get(card["archetype_key"])
@@ -69,7 +70,116 @@ def coach_cards_payload() -> list[dict[str, Any]]:
 
 
 def _coach_cards():
-    return generate_cards(_demo_snapshot(), surface_count=2, include_weather=False)
+    return generate_cards(_demo_snapshot(), surface_count=2, include_weather=True)
+
+
+def integrations_status_payload() -> dict[str, Any]:
+    model_files = sorted((ROOT / "ML" / "NILM").glob("*.pth"))
+    joblib_files = sorted((ROOT / "ML").glob("**/*.joblib"))
+    return {
+        "pdf": {
+            "available": importlib.util.find_spec("reportlab") is not None,
+            "endpoint": "/api/report/monthly",
+        },
+        "weather": {
+            "available": True,
+            "source": "open-meteo",
+            "endpoint": "/api/weather?city=Kuala%20Lumpur",
+        },
+        "ml": {
+            "nilm_model_count": len(model_files),
+            "nilm_models": [path.name for path in model_files],
+            "torch_available": importlib.util.find_spec("torch") is not None,
+            "joblib_model_count": len(joblib_files),
+            "joblib_models": [str(path.relative_to(ROOT)) for path in joblib_files],
+            "status_endpoint": "/api/ml/status",
+            "inference_endpoint": "/api/ml/nilm/infer",
+        },
+    }
+
+
+def weather_payload(city: str) -> dict[str, Any]:
+    from ML.insights.coach.weather import get_forecast_safe
+
+    forecast = get_forecast_safe(city)
+    if forecast is None:
+        return {
+            "available": False,
+            "city": city,
+            "source": "open-meteo",
+            "reason": "forecast unavailable; backend may be offline",
+        }
+    return {
+        "available": True,
+        "city": forecast.city,
+        "current_temp_c": forecast.current_temp_c,
+        "today_max_c": forecast.today_max_c,
+        "daily_max_c": forecast.daily_max_c,
+        "hot_days_over_33c": forecast.hot_days_over_33c,
+        "fetched_at": forecast.fetched_at.isoformat(),
+        "source": forecast.source,
+    }
+
+
+def monthly_report_bytes(mode: str) -> tuple[bytes | None, dict[str, Any] | None]:
+    if importlib.util.find_spec("reportlab") is None:
+        return None, {
+            "error": "reportlab not installed",
+            "install": "python -m pip install reportlab",
+        }
+
+    from ML.insights.coach.pdf_report import generate_monthly_report
+
+    mode = mode if mode in {"summary", "detailed"} else "summary"
+    out_path = ROOT / "backend" / "generated" / f"wattseye_report_{mode}.pdf"
+    path = generate_monthly_report(_demo_snapshot(), out_path, mode=mode)
+    return path.read_bytes(), None
+
+
+def ml_status_payload() -> dict[str, Any]:
+    return integrations_status_payload()["ml"]
+
+
+def nilm_infer_payload(body: dict[str, Any]) -> dict[str, Any]:
+    if importlib.util.find_spec("torch") is None:
+        return {
+            "available": False,
+            "reason": "PyTorch is not installed",
+            "install": "python -m pip install torch",
+        }
+
+    from argparse import Namespace
+    import torch
+    from ML.NILM.test_nilm_inference import (
+        MODEL_DIR,
+        run_one,
+        synthetic_window,
+    )
+
+    window = body.get("power_window")
+    if not isinstance(window, list) or not window:
+        window = synthetic_window(240)
+    window = [float(value) for value in window][-240:]
+    if len(window) < 240:
+        window = [window[0]] * (240 - len(window)) + window
+
+    requested = body.get("models")
+    if requested == "all":
+        model_paths = sorted(MODEL_DIR.glob("*.pth"))
+    elif isinstance(requested, list) and requested:
+        model_paths = [MODEL_DIR / str(name) for name in requested]
+    else:
+        model_paths = [MODEL_DIR / "kettle.pth"]
+
+    args = Namespace(
+        input_mean=float(body.get("input_mean", 0.0)),
+        input_std=float(body.get("input_std", 1.0)),
+        output_mean=float(body.get("output_mean", 0.0)),
+        output_std=float(body.get("output_std", 1.0)),
+        warmup=int(body.get("warmup", 1)),
+    )
+    rows = [run_one(path, window, torch.device("cpu"), args) for path in model_paths]
+    return {"available": True, "window_size": len(window), "predictions": rows}
 
 
 def whatsapp_status_payload() -> dict[str, Any]:
@@ -106,11 +216,31 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if path == "/api/dashboard":
             self._send_json(dashboard_payload())
         elif path == "/api/coach/cards":
             self._send_json(coach_cards_payload())
+        elif path == "/api/integrations/status":
+            self._send_json(integrations_status_payload())
+        elif path == "/api/weather":
+            city = query.get("city", ["Kuala Lumpur"])[0]
+            self._send_json(weather_payload(city))
+        elif path == "/api/ml/status":
+            self._send_json(ml_status_payload())
+        elif path == "/api/report/monthly":
+            mode = query.get("mode", ["summary"])[0]
+            content, error = monthly_report_bytes(mode)
+            if error is not None:
+                self._send_json(error, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                self._send_bytes(
+                    content or b"",
+                    "application/pdf",
+                    f'wattseye_report_{mode}.pdf',
+                )
         elif path == "/api/whatsapp/status":
             self._send_json(whatsapp_status_payload())
         elif path == "/api/bill":
@@ -144,6 +274,9 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith(prefix) or not path.endswith(suffix):
             if path == "/api/whatsapp/send":
                 self._send_json(send_whatsapp_payload(self._read_json()))
+                return
+            if path == "/api/ml/nilm/infer":
+                self._send_json(nilm_infer_payload(self._read_json()))
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
@@ -183,6 +316,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(raw)
+
+    def _send_bytes(
+        self,
+        payload: bytes,
+        content_type: str,
+        filename: str | None = None,
+    ) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        if filename:
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{filename}"',
+            )
+        self.end_headers()
+        self.wfile.write(payload)
 
 
 def main() -> None:
