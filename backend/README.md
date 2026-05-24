@@ -31,6 +31,8 @@ Implemented endpoints:
 - `GET /api/report/monthly?mode=summary`
 - `GET /api/whatsapp/status`
 - `POST /api/whatsapp/send`
+- `GET /api/phones`
+- `POST /api/phones/pair`
 - `GET /api/bill`
 - `GET /api/history`
 
@@ -85,6 +87,47 @@ flutter run --dart-define=WATTSEYE_API_BASE=http://192.168.1.50:8080
 ```
 
 For Android emulator use `http://10.0.2.2:8080` instead of `localhost`.
+
+## Connect A New Phone
+
+Use this flow when the backend is running on the Raspberry Pi or your laptop.
+The phone and backend must be on the same WiFi network.
+
+1. Start the backend:
+
+```powershell
+cd wattseye_repo
+python backend/api_server.py --host 0.0.0.0 --port 8080
+```
+
+2. Find the backend computer's local IP address:
+
+```powershell
+ipconfig
+```
+
+Use the `IPv4 Address`, for example `192.168.1.50`.
+
+3. Run or build the Flutter app for the phone with that backend address:
+
+```powershell
+cd wattseye_app
+flutter run --dart-define=WATTSEYE_API_BASE=http://192.168.1.50:8080
+```
+
+4. Open WattsEye on the phone, then go to `Profile`.
+5. Confirm `API bridge` says `Connected`.
+6. Read the `Pairing code` shown under `Connected phones`.
+7. Tap `Pair this phone`.
+8. Enter a phone name and the 6-digit pairing code.
+9. Tap `Connect phone`.
+10. Pull down to refresh Profile. The phone should appear in `Connected phones`.
+
+You can also verify pairing from PowerShell:
+
+```powershell
+Invoke-RestMethod -Uri http://192.168.1.50:8080/api/phones
+```
 
 ## WhatsApp
 

@@ -39,6 +39,29 @@ class WattsEyeApi {
     return IntegrationStatus.fromJson(_decodeMap(response.body));
   }
 
+  Future<PhoneConnectionStatus> getPhones() async {
+    final response = await _get('/api/phones');
+    return PhoneConnectionStatus.fromJson(_decodeMap(response.body));
+  }
+
+  Future<PhoneConnectionStatus> pairPhone({
+    required String code,
+    required String phoneName,
+    String platform = 'mobile',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/phones/pair'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'code': code,
+        'phone_name': phoneName,
+        'platform': platform,
+      }),
+    );
+    _check(response);
+    return PhoneConnectionStatus.fromJson(_decodeMap(response.body));
+  }
+
   Future<void> markCoachAction(String archetypeKey, String action) async {
     final response = await _client.post(
       Uri.parse('$baseUrl/api/coach/cards/$archetypeKey/action'),
@@ -133,6 +156,55 @@ class IntegrationStatus {
       nilmModelCount: _int(ml['nilm_model_count']),
       torchAvailable: ml['torch_available'] == true,
       joblibModelCount: _int(ml['joblib_model_count']),
+    );
+  }
+}
+
+class PhoneConnectionStatus {
+  const PhoneConnectionStatus({
+    required this.pairingCode,
+    required this.pairingCodeHint,
+    required this.phones,
+  });
+
+  final String pairingCode;
+  final String pairingCodeHint;
+  final List<PairedPhone> phones;
+
+  factory PhoneConnectionStatus.fromJson(Map<String, dynamic> json) {
+    return PhoneConnectionStatus(
+      pairingCode: json['pairing_code']?.toString() ?? '',
+      pairingCodeHint: json['pairing_code_hint']?.toString() ?? '',
+      phones: [
+        for (final item in (json['phones'] as List? ?? const []))
+          if (item is Map) PairedPhone.fromJson(Map<String, dynamic>.from(item)),
+      ],
+    );
+  }
+}
+
+class PairedPhone {
+  const PairedPhone({
+    required this.phoneId,
+    required this.phoneName,
+    required this.platform,
+    required this.pairedAt,
+    required this.lastSeen,
+  });
+
+  final String phoneId;
+  final String phoneName;
+  final String platform;
+  final DateTime? pairedAt;
+  final DateTime? lastSeen;
+
+  factory PairedPhone.fromJson(Map<String, dynamic> json) {
+    return PairedPhone(
+      phoneId: json['phone_id']?.toString() ?? '',
+      phoneName: json['phone_name']?.toString() ?? 'Phone',
+      platform: json['platform']?.toString() ?? 'mobile',
+      pairedAt: DateTime.tryParse(json['paired_at']?.toString() ?? ''),
+      lastSeen: DateTime.tryParse(json['last_seen']?.toString() ?? ''),
     );
   }
 }

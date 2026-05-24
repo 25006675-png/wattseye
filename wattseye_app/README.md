@@ -1,17 +1,37 @@
-# wattseye_app
+# WattsEye App
 
-A new Flutter project.
+Flutter frontend for the WattsEye dashboard.
 
-## Getting Started
+## Run On A New Phone
 
-This project is a starting point for a Flutter application.
+1. Start the backend from the repo root:
 
-A few resources to get you started if this is your first Flutter project:
+```powershell
+cd ..\backend
+python api_server.py --host 0.0.0.0 --port 8080
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+2. Find the backend computer's WiFi IP:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```powershell
+ipconfig
+```
+
+3. Connect the phone to the same WiFi.
+4. Run the app using the backend IP:
+
+```powershell
+flutter run --dart-define=WATTSEYE_API_BASE=http://192.168.1.50:8080
+```
+
+Replace `192.168.1.50` with your real IPv4 address.
+
+5. Open `Profile`.
+6. Check `API bridge` is `Connected`.
+7. Copy the `Pairing code` shown in `Connected phones`.
+8. Tap `Pair this phone`.
+9. Enter the phone name and 6-digit pairing code.
+10. Tap `Connect phone`.
+
+After pairing, pull down on Profile to refresh. The phone appears in the
+connected phone list.
