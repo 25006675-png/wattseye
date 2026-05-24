@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,11 @@ from ML.insights.coach.coach_engine import (  # noqa: E402
     _demo_snapshot,
     cards_to_json,
     generate_cards,
+)
+from ML.insights.coach.whatsapp import (  # noqa: E402
+    SETUP_ENV_VARS,
+    TwilioConfig,
+    send_card_via_whatsapp,
 )
 
 USER_ACTIONS: dict[str, str] = {}
@@ -62,6 +68,37 @@ def coach_cards_payload() -> list[dict[str, Any]]:
     return payload
 
 
+def _coach_cards():
+    return generate_cards(_demo_snapshot(), surface_count=2, include_weather=False)
+
+
+def whatsapp_status_payload() -> dict[str, Any]:
+    configured = TwilioConfig.from_env() is not None
+    missing = [name for name in SETUP_ENV_VARS if not os.environ.get(name)]
+    return {
+        "configured": configured,
+        "missing": missing,
+        "setup_needed": SETUP_ENV_VARS,
+    }
+
+
+def send_whatsapp_payload(body: dict[str, Any]) -> dict[str, Any]:
+    archetype_key = str(body.get("archetype_key") or "")
+    dry_run = bool(body.get("dry_run", False))
+    use_llm = bool(body.get("use_llm", True))
+
+    cards = _coach_cards()
+    card = next((item for item in cards if item.archetype_key == archetype_key), None)
+    if card is None:
+        return {
+            "sent": False,
+            "reason": f"unknown archetype_key: {archetype_key}",
+            "setup_needed": SETUP_ENV_VARS,
+        }
+
+    return send_card_via_whatsapp(card, use_llm=use_llm, dry_run=dry_run)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "WattsEyeApi/0.1"
 
@@ -74,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(dashboard_payload())
         elif path == "/api/coach/cards":
             self._send_json(coach_cards_payload())
+        elif path == "/api/whatsapp/status":
+            self._send_json(whatsapp_status_payload())
         elif path == "/api/bill":
             self._send_json(
                 {
@@ -103,6 +142,9 @@ class Handler(BaseHTTPRequestHandler):
         prefix = "/api/coach/cards/"
         suffix = "/action"
         if not path.startswith(prefix) or not path.endswith(suffix):
+            if path == "/api/whatsapp/send":
+                self._send_json(send_whatsapp_payload(self._read_json()))
+                return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
 

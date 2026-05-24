@@ -410,6 +410,29 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  Future<void> _sendWhatsAppAlert(String keyName) async {
+    if (!_backendOnline) {
+      _snack(context, 'Start the backend before sending WhatsApp alerts');
+      return;
+    }
+    try {
+      final result = await _api.sendWhatsAppAlert(keyName);
+      if (!mounted) return;
+      if (result.sent) {
+        _snack(context, 'WhatsApp alert sent');
+      } else if (result.setupNeeded.isNotEmpty) {
+        _snack(context, 'Add Twilio env vars, then restart backend');
+      } else {
+        _snack(
+          context,
+          result.reason.isEmpty ? 'WhatsApp not sent' : result.reason,
+        );
+      }
+    } catch (_) {
+      if (mounted) _snack(context, 'WhatsApp send failed');
+    }
+  }
+
   void _openCoachCard(String keyName) {
     final card = _cards.firstWhere((item) => item.data.keyName == keyName);
     Navigator.of(context).push(
@@ -435,6 +458,7 @@ class _HomeShellState extends State<HomeShell> {
         coachCards: _cards,
         backendOnline: _backendOnline,
         onRefresh: _refreshBackendData,
+        onSendWhatsApp: _sendWhatsAppAlert,
         onOpenCoach: _openCoachCard,
       ),
       CoachPage(
@@ -512,6 +536,7 @@ class DashboardPage extends StatelessWidget {
     required this.coachCards,
     required this.backendOnline,
     required this.onRefresh,
+    required this.onSendWhatsApp,
     required this.onOpenCoach,
   });
 
@@ -519,6 +544,7 @@ class DashboardPage extends StatelessWidget {
   final List<CoachCardState> coachCards;
   final bool backendOnline;
   final Future<void> Function() onRefresh;
+  final Future<void> Function(String keyName) onSendWhatsApp;
   final ValueChanged<String> onOpenCoach;
 
   @override
@@ -611,7 +637,8 @@ class DashboardPage extends StatelessWidget {
                       ),
                     ),
                     OutlinedButton.icon(
-                      onPressed: () => _snack(context, 'WhatsApp alert queued'),
+                      onPressed: () =>
+                          onSendWhatsApp(topCard?.keyName ?? 'left_on_empty'),
                       icon: const Icon(Icons.chat_outlined, size: 18),
                       label: const Text('WhatsApp'),
                     ),

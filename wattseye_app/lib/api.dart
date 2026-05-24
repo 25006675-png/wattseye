@@ -43,6 +43,16 @@ class WattsEyeApi {
     _check(response);
   }
 
+  Future<WhatsAppSendResult> sendWhatsAppAlert(String archetypeKey) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/whatsapp/send'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'archetype_key': archetypeKey}),
+    );
+    _check(response);
+    return WhatsAppSendResult.fromJson(_decodeMap(response.body));
+  }
+
   Future<http.Response> _get(String path) async {
     final response = await _client.get(Uri.parse('$baseUrl$path'));
     _check(response);
@@ -64,6 +74,32 @@ class WattsEyeApi {
       throw const FormatException('Expected a JSON object');
     }
     return Map<String, dynamic>.from(data);
+  }
+}
+
+class WhatsAppSendResult {
+  const WhatsAppSendResult({
+    required this.sent,
+    required this.reason,
+    required this.body,
+    required this.setupNeeded,
+  });
+
+  final bool sent;
+  final String reason;
+  final String body;
+  final List<String> setupNeeded;
+
+  factory WhatsAppSendResult.fromJson(Map<String, dynamic> json) {
+    return WhatsAppSendResult(
+      sent: json['sent'] == true,
+      reason: json['reason']?.toString() ?? '',
+      body: json['body']?.toString() ?? '',
+      setupNeeded: [
+        for (final item in (json['setup_needed'] as List? ?? const []))
+          item.toString(),
+      ],
+    );
   }
 }
 
