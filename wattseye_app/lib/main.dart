@@ -358,6 +358,7 @@ class _HomeShellState extends State<HomeShell> {
   late List<CoachCardState> _cards;
   DashboardSnapshot? _dashboard;
   IntegrationStatus? _integrations;
+  PhoneConnectionStatus? _phones;
   bool _backendOnline = false;
   String _connectionLabel = 'Demo data';
 
@@ -374,15 +375,18 @@ class _HomeShellState extends State<HomeShell> {
         _api.getDashboard(),
         _api.getCoachCards(),
         _api.getIntegrationStatus(),
+        _api.getPhones(),
       ]);
       final dashboard = results[0] as DashboardSnapshot;
       final coachCards = results[1] as List<Map<String, dynamic>>;
       final integrations = results[2] as IntegrationStatus;
+      final phones = results[3] as PhoneConnectionStatus;
       if (!mounted) return;
       setState(() {
         _dashboard = dashboard;
         _cards = coachCards.map(_coachCardFromApi).toList();
         _integrations = integrations;
+        _phones = phones;
         _backendOnline = true;
         _connectionLabel = 'Live Pi';
       });
@@ -392,6 +396,21 @@ class _HomeShellState extends State<HomeShell> {
         _backendOnline = false;
         _connectionLabel = 'Demo data';
       });
+    }
+  }
+
+  Future<void> _pairPhone(String code, String phoneName) async {
+    if (!_backendOnline) {
+      _snack(context, 'Start the backend before pairing a phone');
+      return;
+    }
+    try {
+      final phones = await _api.pairPhone(code: code, phoneName: phoneName);
+      if (!mounted) return;
+      setState(() => _phones = phones);
+      _snack(context, '$phoneName connected');
+    } catch (_) {
+      if (mounted) _snack(context, 'Pairing failed - check the 6-digit code');
     }
   }
 
@@ -429,7 +448,7 @@ class _HomeShellState extends State<HomeShell> {
       } else {
         _snack(
           context,
-          result.reason.isEmpty ? 'WhatsApp not sent' : result.reason,
+          _whatsAppStatusMessage(result.reason),
         );
       }
     } catch (_) {
@@ -477,7 +496,13 @@ class _HomeShellState extends State<HomeShell> {
         onOpenCoach: _openCoachCard,
       ),
       const HistoryPage(),
-      ProfilePage(integrations: _integrations, backendOnline: _backendOnline),
+      ProfilePage(
+        integrations: _integrations,
+        phones: _phones,
+        backendOnline: _backendOnline,
+        onPairPhone: _pairPhone,
+        onRefresh: _refreshBackendData,
+      ),
     ];
 
     return Scaffold(
@@ -1273,18 +1298,27 @@ class ProfilePage extends StatelessWidget {
   const ProfilePage({
     super.key,
     required this.integrations,
+    required this.phones,
     required this.backendOnline,
+    required this.onPairPhone,
+    required this.onRefresh,
   });
 
   final IntegrationStatus? integrations;
+  final PhoneConnectionStatus? phones;
   final bool backendOnline;
+  final Future<void> Function(String code, String phoneName) onPairPhone;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final status = integrations;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      children: [
+    final phoneStatus = phones;
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
         const PageHeader(
           subtitle: 'Account, household, hardware, and data settings',
         ),
@@ -1368,6 +1402,39 @@ class ProfilePage extends StatelessWidget {
             ),
           ],
         ),
+        ProfileSection(
+          title: 'Connected phones',
+          rows: [
+            SettingsRow(
+              label: 'Pairing code',
+              value: backendOnline
+                  ? (phoneStatus?.pairingCode.isEmpty ?? true
+                        ? 'Loading'
+                        : phoneStatus!.pairingCode)
+                  : 'Backend offline',
+            ),
+            SettingsRow(
+              label: 'API address',
+              value: _apiBaseLabel(),
+            ),
+            SettingsRow(
+              label: 'Connected phones',
+              value: phoneStatus == null
+                  ? 'Unknown'
+                  : '${phoneStatus.phones.length}',
+            ),
+            SettingsRow(
+              label: 'Pair this phone',
+              actionable: true,
+              onTap: () => _showPairPhoneSheet(context, onPairPhone),
+            ),
+            for (final phone in phoneStatus?.phones ?? const <PairedPhone>[])
+              SettingsRow(
+                label: phone.phoneName,
+                value: 'Last seen ${_dateLabel(phone.lastSeen)}',
+              ),
+          ],
+        ),
         const ProfileSection(
           title: 'TNB Account',
           rows: [
@@ -1448,7 +1515,8 @@ class ProfilePage extends StatelessWidget {
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.labelSmall,
         ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -2260,6 +2328,96 @@ void _snack(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
+String _whatsAppStatusMessage(String reason) {
+  if (reason.isEmpty) return 'WhatsApp not sent';
+  if (reason.startsWith('already pushed this archetype')) {
+    return 'Already sent recently - try again later';
+  }
+  if (reason.startsWith('global rate-limit')) {
+    return 'WhatsApp alert paused to avoid spam';
+  }
+  if (reason == 'archetype not in PUSH_ARCHETYPES') {
+    return 'This coach card is app-only, not a WhatsApp alert';
+  }
+  if (reason == 'dry_run') return 'WhatsApp preview generated';
+  if (reason == 'missing twilio env vars') {
+    return 'Add Twilio env vars, then restart backend';
+  }
+  if (reason.startsWith('twilio error:')) return 'WhatsApp provider error';
+  return 'WhatsApp not sent';
+}
+
+void _showPairPhoneSheet(
+  BuildContext context,
+  Future<void> Function(String code, String phoneName) onPairPhone,
+) {
+  final codeController = TextEditingController();
+  final nameController = TextEditingController(text: 'My phone');
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      return Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pair this phone',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Phone name',
+                prefixIcon: Icon(Icons.phone_android_outlined),
+              ),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: codeController,
+              decoration: const InputDecoration(
+                labelText: '6-digit pairing code',
+                prefixIcon: Icon(Icons.password_outlined),
+              ),
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () async {
+                  await onPairPhone(
+                    codeController.text.trim(),
+                    nameController.text.trim().isEmpty
+                        ? 'My phone'
+                        : nameController.text.trim(),
+                  );
+                  if (context.mounted) Navigator.of(context).pop();
+                },
+                icon: const Icon(Icons.link_outlined),
+                label: const Text('Connect phone'),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  ).whenComplete(() {
+    codeController.dispose();
+    nameController.dispose();
+  });
+}
+
 extension InsightActionApi on InsightAction {
   String get apiValue {
     return switch (this) {
@@ -2322,6 +2480,15 @@ String _timeLabel(DateTime? timestamp) {
   final hour = timestamp.hour.toString().padLeft(2, '0');
   final minute = timestamp.minute.toString().padLeft(2, '0');
   return 'synced $hour:$minute';
+}
+
+String _dateLabel(DateTime? timestamp) {
+  if (timestamp == null) return 'unknown';
+  final month = timestamp.month.toString().padLeft(2, '0');
+  final day = timestamp.day.toString().padLeft(2, '0');
+  final hour = timestamp.hour.toString().padLeft(2, '0');
+  final minute = timestamp.minute.toString().padLeft(2, '0');
+  return '$day/$month $hour:$minute';
 }
 
 String _apiBaseLabel() => defaultApiBaseUrl;

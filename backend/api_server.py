@@ -14,6 +14,7 @@ import argparse
 import importlib.util
 import json
 import os
+import secrets
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +37,8 @@ from ML.insights.coach.whatsapp import (  # noqa: E402
 )
 
 USER_ACTIONS: dict[str, str] = {}
+PHONE_REGISTRY_PATH = ROOT / "backend" / "generated" / "paired_phones.json"
+PAIRING_CODE = f"{secrets.randbelow(900000) + 100000}"
 
 
 def dashboard_payload() -> dict[str, Any]:
@@ -96,6 +99,76 @@ def integrations_status_payload() -> dict[str, Any]:
             "inference_endpoint": "/api/ml/nilm/infer",
         },
     }
+
+
+def phones_payload() -> dict[str, Any]:
+    return {
+        "pairing_code": PAIRING_CODE,
+        "pairing_code_hint": "Enter this 6-digit code on the new phone.",
+        "pairing_url": "/api/phones/pair",
+        "phones": _load_paired_phones(),
+    }
+
+
+def pair_phone_payload(body: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
+    if str(body.get("code", "")).strip() != PAIRING_CODE:
+        return {"paired": False, "error": "Invalid pairing code"}, HTTPStatus.BAD_REQUEST
+
+    phone_name = str(body.get("phone_name") or "New phone").strip()[:48]
+    platform = str(body.get("platform") or "mobile").strip()[:24]
+    phone_id = str(body.get("phone_id") or secrets.token_hex(8)).strip()[:48]
+    phones = [
+        phone for phone in _load_paired_phones()
+        if phone.get("phone_id") != phone_id
+    ]
+    phones.append(
+        {
+            "phone_id": phone_id,
+            "phone_name": phone_name,
+            "platform": platform,
+            "paired_at": _now_iso(),
+            "last_seen": _now_iso(),
+        }
+    )
+    _save_paired_phones(phones)
+    payload = phones_payload()
+    payload["paired"] = True
+    payload["phone_id"] = phone_id
+    return payload, HTTPStatus.OK
+
+
+def _load_paired_phones() -> list[dict[str, Any]]:
+    if not PHONE_REGISTRY_PATH.exists():
+        return [
+            {
+                "phone_id": "primary-demo",
+                "phone_name": "Primary phone",
+                "platform": "mobile",
+                "paired_at": "2026-05-24T10:00:00",
+                "last_seen": "2026-05-24T10:00:00",
+            }
+        ]
+    try:
+        data = json.loads(PHONE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [dict(item) for item in data if isinstance(item, dict)]
+
+
+def _save_paired_phones(phones: list[dict[str, Any]]) -> None:
+    PHONE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PHONE_REGISTRY_PATH.write_text(
+        json.dumps(phones, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def weather_payload(city: str) -> dict[str, Any]:
@@ -243,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
         elif path == "/api/whatsapp/status":
             self._send_json(whatsapp_status_payload())
+        elif path == "/api/phones":
+            self._send_json(phones_payload())
         elif path == "/api/bill":
             self._send_json(
                 {
@@ -277,6 +352,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ml/nilm/infer":
                 self._send_json(nilm_infer_payload(self._read_json()))
+                return
+            if path == "/api/phones/pair":
+                payload, status = pair_phone_payload(self._read_json())
+                self._send_json(payload, status)
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return

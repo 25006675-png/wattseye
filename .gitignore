@@ -14,6 +14,9 @@ ML/insights/coach/_weather_cache/
 ML/insights/coach/_whatsapp_sent.json
 ML/insights/coach/_user_actions.json
 
+# Backend generated reports and local pairing state
+backend/generated/
+
 # OS / editor / agent
 .DS_Store
 Thumbs.db
