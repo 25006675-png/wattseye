@@ -123,3 +123,86 @@ Five message types total. No FAQ bot, no help menu, no general chat.
 > *"Coach delivers actionable insights through the app for browsing, and through WhatsApp in Manglish for moments that need attention now — one structured pipeline, two channels, never more than four pushes a week."*
 
 Sharp product statement. Another thing no foreign competitor does.
+
+
+Right call — Meta Cloud API has a generous free tier and doesn't need a card. Here's the path.
+
+  Setup steps (you do these — ~30-45 min)
+
+  1. Meta Business account
+
+  - Go to https://business.facebook.com → "Create account" (free, uses your Facebook login)
+  - Name it anything (e.g., "WattsEye")
+
+  2. Create a Meta App
+
+  - Go to https://developers.facebook.com/apps → "Create app"
+  - Use case: Other → Type: Business
+  - Link it to the Business account you just made
+
+  3. Add WhatsApp product
+
+  - In your new app dashboard → "Add product" → find WhatsApp → "Set up"
+  - Meta gives you:
+    - A test phone number (their +1 555 ... number — like Twilio sandbox)
+    - A Phone Number ID (long number — copy this)
+    - A WhatsApp Business Account (WABA) ID (copy this)
+    - A temporary 24-hour access token (copy this — you'll regenerate later)
+
+  4. Add your phone as test recipient
+
+  - In WhatsApp panel → "API Setup" → "To" field → "Manage phone number list"
+  - Add your number (+60195613440) → Meta sends you a WhatsApp verification code → enter it
+  - You can add up to 5 test recipients total (your phone, judge's phone, etc.) — all free
+
+  5. Test send from Meta's dashboard
+
+  - Still in "API Setup" → click "Send message" button
+  - A "hello_world" template message lands on your phone within 5 seconds
+  - Confirms the setup works before you touch code
+
+  6. Save these 4 values
+
+  META_PHONE_NUMBER_ID=<the long ID Meta showed>
+  META_ACCESS_TOKEN=<the temporary token, regenerate later>
+  META_WABA_ID=<your WhatsApp Business Account ID>
+  META_RECIPIENT=60195613440          (no + or 'whatsapp:' prefix)
+
+  7. Permanent token (later, not needed for hackathon)
+
+  The temp token expires in 24h. For permanent: Business Settings → System Users → create one with WhatsApp permissions →
+  generate a token that never expires. Skip for now — 24h temp is fine.
+
+  ---
+  Code side — I can do this now
+
+  I'll add a parallel meta.py module so you can swap providers via env var. Same send_card_via_whatsapp() calling
+  interface, different driver underneath. Want me to:
+
+  Option A — Replace Twilio entirely with Meta (cleaner)
+  Option B — Make it pluggable (WHATSAPP_DRIVER=twilio | meta env var, both work)
+
+  For a hackathon where you've already proven Twilio works, Option A is simpler. Less code to maintain. Twilio's done its
+  job demonstrating the integration to me; Meta becomes the real one.
+
+  If you say go, I'll:
+  1. Rewrite ML/insights/coach/whatsapp.py to call Meta's Graph API
+  2. Rewrite ML/insights/coach/whatsapp_webhook.py to handle Meta's JSON webhook format + GET verification challenge
+  3. Update .env.example with Meta env vars
+  4. Keep the same external interface (send_card_via_whatsapp, push_eligible_cards) so nothing else changes
+
+  The 2-stage classifier (keyword + Gemini fallback) and rate limiting stay identical — those don't depend on which
+  provider sends the message.
+
+  Two things to know about Meta specifically:
+
+  1. Free-form messages need a recent user-initiated message in the conversation (within 24h). For the demo: have your
+  phone send any message to the Meta number first ("hi"), then your alerts can flow freely for 24h. Same window concept as
+  Twilio.
+  2. Template messages bypass the 24h window but need pre-approval (3-7 days). Skip for hackathon — the 24h conversation
+  window is enough.
+
+  Tell me when you've done steps 1-5 and copied the 4 values. I'll wire the code while you wait, ready to drop your env
+  vars in.
+
+
