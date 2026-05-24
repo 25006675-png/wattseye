@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'api.dart';
 import 'theme.dart';
 
 void main() {
@@ -351,17 +352,46 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
+  final _api = WattsEyeApi();
   int _selectedIndex = 0;
   bool _touPreview = false;
   late List<CoachCardState> _cards;
+  DashboardSnapshot? _dashboard;
+  bool _backendOnline = false;
+  String _connectionLabel = 'Demo data';
 
   @override
   void initState() {
     super.initState();
     _cards = _coachCards.map((card) => CoachCardState(card)).toList();
+    _refreshBackendData();
   }
 
-  void _markAction(String keyName, InsightAction action) {
+  Future<void> _refreshBackendData() async {
+    try {
+      final results = await Future.wait<Object>([
+        _api.getDashboard(),
+        _api.getCoachCards(),
+      ]);
+      final dashboard = results[0] as DashboardSnapshot;
+      final coachCards = results[1] as List<Map<String, dynamic>>;
+      if (!mounted) return;
+      setState(() {
+        _dashboard = dashboard;
+        _cards = coachCards.map(_coachCardFromApi).toList();
+        _backendOnline = true;
+        _connectionLabel = 'Live Pi';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _backendOnline = false;
+        _connectionLabel = 'Demo data';
+      });
+    }
+  }
+
+  Future<void> _markAction(String keyName, InsightAction action) async {
     setState(() {
       _cards = [
         for (final card in _cards)
@@ -371,6 +401,13 @@ class _HomeShellState extends State<HomeShell> {
             card,
       ];
     });
+    if (_backendOnline) {
+      try {
+        await _api.markCoachAction(keyName, action.apiValue);
+      } catch (_) {
+        if (mounted) _snack(context, 'Saved locally - backend did not confirm');
+      }
+    }
   }
 
   void _openCoachCard(String keyName) {
@@ -379,8 +416,9 @@ class _HomeShellState extends State<HomeShell> {
       MaterialPageRoute(
         builder: (_) => CardDetailScreen(
           card: card,
-          onAction: (action) {
-            _markAction(keyName, action);
+          onAction: (action) async {
+            await _markAction(keyName, action);
+            if (!mounted) return;
             Navigator.of(context).pop();
           },
         ),
@@ -392,9 +430,16 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     const titles = ['Dashboard', 'Coach', 'Bill', 'History', 'Profile'];
     final pages = [
-      DashboardPage(onOpenCoach: _openCoachCard),
+      DashboardPage(
+        dashboard: _dashboard,
+        coachCards: _cards,
+        backendOnline: _backendOnline,
+        onRefresh: _refreshBackendData,
+        onOpenCoach: _openCoachCard,
+      ),
       CoachPage(
         cards: _cards,
+        onRefresh: _refreshBackendData,
         onCardTap: _openCoachCard,
         onAction: _markAction,
       ),
@@ -410,11 +455,14 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       appBar: AppBar(
         title: Text(titles[_selectedIndex]),
-        actions: const [
+        actions: [
           Padding(
-            padding: EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 16),
             child: Center(
-              child: ChipLabel(text: 'Live Pi', color: AppTheme.green),
+              child: ChipLabel(
+                text: _connectionLabel,
+                color: _backendOnline ? AppTheme.green : AppTheme.amber,
+              ),
             ),
           ),
         ],
@@ -458,44 +506,73 @@ class _HomeShellState extends State<HomeShell> {
 }
 
 class DashboardPage extends StatelessWidget {
-  const DashboardPage({super.key, required this.onOpenCoach});
+  const DashboardPage({
+    super.key,
+    required this.dashboard,
+    required this.coachCards,
+    required this.backendOnline,
+    required this.onRefresh,
+    required this.onOpenCoach,
+  });
 
+  final DashboardSnapshot? dashboard;
+  final List<CoachCardState> coachCards;
+  final bool backendOnline;
+  final Future<void> Function() onRefresh;
   final ValueChanged<String> onOpenCoach;
 
   @override
   Widget build(BuildContext context) {
+    final snapshot = dashboard;
+    final topCard = coachCards.isEmpty ? null : coachCards.first.data;
+    final appliances = snapshot?.activeAppliances ?? const <ActiveAppliance>[];
+    final livePowerW = snapshot?.livePowerW ?? 1420;
+    final todayCost = snapshot == null
+        ? 'RM4.97'
+        : 'RM${snapshot.todayCostRm.toStringAsFixed(2)}';
+    final projectedBill = snapshot == null
+        ? 'RM149'
+        : 'RM${snapshot.projectedBillRm.round()}';
+    final occupancy = snapshot == null
+        ? 'Away'
+        : _titleCase(snapshot.occupancyState);
+
     return RefreshIndicator(
-      onRefresh: () async {},
+      onRefresh: onRefresh,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          const PageHeader(subtitle: 'Live from home Pi - synced 2 min ago'),
+          PageHeader(
+            subtitle: backendOnline
+                ? 'Live from backend - ${_timeLabel(snapshot?.timestamp)}'
+                : 'Backend offline - showing demo data',
+          ),
           const SizedBox(height: 12),
-          const LivePowerCard(),
+          LivePowerCard(watts: livePowerW),
           const SizedBox(height: 12),
-          const MetricGrid(
+          MetricGrid(
             metrics: [
               MetricData(
                 'Today cost',
-                'RM4.97',
+                todayCost,
                 Icons.payments_outlined,
                 AppTheme.green,
               ),
               MetricData(
                 'Projected bill',
-                'RM149',
+                projectedBill,
                 Icons.trending_up_outlined,
                 AppTheme.primary,
               ),
               MetricData(
                 'Appliances on',
-                '4',
+                appliances.isEmpty ? '4' : appliances.length.toString(),
                 Icons.sensors_outlined,
                 AppTheme.amber,
               ),
               MetricData(
                 'Occupancy',
-                'Away',
+                occupancy,
                 Icons.directions_walk_outlined,
                 AppTheme.muted,
               ),
@@ -510,12 +587,13 @@ class DashboardPage extends StatelessWidget {
                 const Overline('HIGH PRIORITY'),
                 const SizedBox(height: 4),
                 Text(
-                  'AC running in an empty room',
+                  topCard?.headline ?? 'AC running in an empty room',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Measured AC load is 900W for 25 minutes with no occupancy. Estimated avoidable cost is RM0.12 so far at your current band.',
+                  topCard?.impact ??
+                      'Measured AC load is 900W for 25 minutes with no occupancy. Estimated avoidable cost is RM0.12 so far at your current band.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -538,7 +616,8 @@ class DashboardPage extends StatelessWidget {
                       label: const Text('WhatsApp'),
                     ),
                     TextButton(
-                      onPressed: () => onOpenCoach('left_on_empty'),
+                      onPressed: () =>
+                          onOpenCoach(topCard?.keyName ?? 'left_on_empty'),
                       child: const Text('Coach detail'),
                     ),
                   ],
@@ -549,45 +628,12 @@ class DashboardPage extends StatelessWidget {
           const SizedBox(height: 16),
           const SectionLabel('Active appliances'),
           const SizedBox(height: 8),
-          const ApplianceTile(
-            icon: Icons.ac_unit,
-            name: 'Air Conditioner',
-            source: 'Measured - Dedicated CT clamp',
-            watts: '900W',
-            cost: 'RM43.20 this month',
-            chips: ['Empty room', 'RM3.50/month if repeated daily'],
-            chipColor: AppTheme.red,
-          ),
-          const ApplianceTile(
-            icon: Icons.kitchen_outlined,
-            name: 'Fridge',
-            source: 'Estimated - NILM',
-            watts: '118W',
-            cost: '~RM18.70 this month',
-            chips: ['Health watch', 'UK-DALE baseline'],
-            chipColor: AppTheme.amber,
-          ),
-          const ApplianceTile(
-            icon: Icons.rice_bowl_outlined,
-            name: 'Unknown load',
-            source: 'Signature library - 88% match',
-            watts: '620W',
-            cost: 'RM0.20/h at current band',
-            chips: ['Likely rice cooker', 'Tap to confirm'],
-            chipColor: AppTheme.amber,
-          ),
-          const ApplianceTile(
-            icon: Icons.coffee_maker_outlined,
-            name: 'Kettle',
-            source: 'Estimated - NILM',
-            watts: '0W',
-            cost: '~RM4.70 this month',
-            chips: ['Normal routine'],
-            chipColor: AppTheme.green,
-          ),
+          ..._applianceTiles(appliances),
           const SizedBox(height: 8),
-          const StatusLine(
-            text: 'AC on, room empty 25 min - Coach is watching.',
+          StatusLine(
+            text: backendOnline
+                ? 'Backend connected at ${_apiBaseLabel()}. Pull to refresh.'
+                : 'Connect the Pi backend at ${_apiBaseLabel()} to replace demo data.',
           ),
         ],
       ),
@@ -596,10 +642,13 @@ class DashboardPage extends StatelessWidget {
 }
 
 class LivePowerCard extends StatelessWidget {
-  const LivePowerCard({super.key});
+  const LivePowerCard({super.key, required this.watts});
+
+  final double watts;
 
   @override
   Widget build(BuildContext context) {
+    final kw = (watts / 1000).toStringAsFixed(2);
     return InfoCard(
       child: Row(
         children: [
@@ -615,8 +664,8 @@ class LivePowerCard extends StatelessWidget {
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 350),
                   child: Text(
-                    '1.42 kW',
-                    key: const ValueKey('1.42'),
+                    '$kw kW',
+                    key: ValueKey(kw),
                     style: Theme.of(
                       context,
                     ).textTheme.titleLarge?.copyWith(fontSize: 36),
@@ -650,13 +699,15 @@ class CoachPage extends StatelessWidget {
   const CoachPage({
     super.key,
     required this.cards,
+    required this.onRefresh,
     required this.onCardTap,
     required this.onAction,
   });
 
   final List<CoachCardState> cards;
+  final Future<void> Function() onRefresh;
   final ValueChanged<String> onCardTap;
-  final void Function(String keyName, InsightAction action) onAction;
+  final Future<void> Function(String keyName, InsightAction action) onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -667,7 +718,7 @@ class CoachPage extends StatelessWidget {
         .round();
 
     return RefreshIndicator(
-      onRefresh: () async {},
+      onRefresh: onRefresh,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
@@ -731,7 +782,7 @@ class CardDetailScreen extends StatelessWidget {
   });
 
   final CoachCardState card;
-  final ValueChanged<InsightAction> onAction;
+  final Future<void> Function(InsightAction action) onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -2135,4 +2186,155 @@ Color familyBorder(String family) {
 
 void _snack(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+extension InsightActionApi on InsightAction {
+  String get apiValue {
+    return switch (this) {
+      InsightAction.done => 'do',
+      InsightAction.remind => 'remind',
+      InsightAction.dismissed => 'dismiss',
+      InsightAction.none => 'none',
+    };
+  }
+}
+
+CoachCardState _coachCardFromApi(Map<String, dynamic> json) {
+  final monthly = _jsonDouble(json['impact_rm_monthly']);
+  return CoachCardState(
+    CoachCardData(
+      id: _jsonInt(json['archetype_id']),
+      keyName: json['archetype_key']?.toString() ?? 'unknown',
+      family: json['family']?.toString() ?? 'context',
+      severity: json['severity']?.toString() ?? 'low',
+      headline: json['headline']?.toString() ?? 'Untitled insight',
+      impact: json['impact_text']?.toString() ?? '',
+      action: json['action_text']?.toString() ?? '',
+      saving: json['saving_text']?.toString().replaceFirst(
+            RegExp(r'^Expected saving:\s*'),
+            '',
+          ) ??
+          'RM ${monthly.toStringAsFixed(0)}/month',
+      effort: json['effort_text']?.toString() ?? 'Low effort',
+      confidence: json['confidence_label']?.toString() ?? 'Medium confidence',
+      rmMonthly: monthly,
+      why: _jsonStringList(json['why_lines']),
+      math: _jsonStringList(json['math_lines']),
+    ),
+  );
+}
+
+int _jsonInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+double _jsonDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+List<String> _jsonStringList(Object? value) {
+  if (value is! List) return const [];
+  return [for (final item in value) item.toString()];
+}
+
+String _titleCase(String value) {
+  if (value.isEmpty) return value;
+  return value[0].toUpperCase() + value.substring(1).toLowerCase();
+}
+
+String _timeLabel(DateTime? timestamp) {
+  if (timestamp == null) return 'synced just now';
+  final hour = timestamp.hour.toString().padLeft(2, '0');
+  final minute = timestamp.minute.toString().padLeft(2, '0');
+  return 'synced $hour:$minute';
+}
+
+String _apiBaseLabel() => defaultApiBaseUrl;
+
+IconData _applianceIcon(String name) {
+  return switch (name.toLowerCase()) {
+    'ac' || 'air_conditioner' => Icons.ac_unit,
+    'fridge' || 'refrigerator' => Icons.kitchen_outlined,
+    'kettle' => Icons.coffee_maker_outlined,
+    'washer' || 'washing_machine' => Icons.local_laundry_service_outlined,
+    _ => Icons.sensors_outlined,
+  };
+}
+
+String _applianceName(String name) {
+  return switch (name.toLowerCase()) {
+    'ac' => 'Air Conditioner',
+    'fridge' => 'Fridge',
+    'washing_machine' => 'Washing Machine',
+    _ => name
+        .split('_')
+        .where((part) => part.isNotEmpty)
+        .map(_titleCase)
+        .join(' '),
+  };
+}
+
+List<Widget> _applianceTiles(List<ActiveAppliance> appliances) {
+  if (appliances.isEmpty) return _demoApplianceTiles();
+  return [
+    for (final appliance in appliances)
+      ApplianceTile(
+        icon: _applianceIcon(appliance.name),
+        name: _applianceName(appliance.name),
+        source: appliance.name == 'ac'
+            ? 'Measured - Dedicated CT clamp'
+            : 'Estimated - NILM',
+        watts: '${appliance.watts.round()}W',
+        cost: 'RM${appliance.todayRm.toStringAsFixed(2)} today',
+        chips: [
+          '${appliance.todayKwh.toStringAsFixed(1)} kWh today',
+          appliance.watts > 0 ? 'Active now' : 'Idle',
+        ],
+        chipColor: appliance.watts > 800 ? AppTheme.red : AppTheme.green,
+      ),
+  ];
+}
+
+List<Widget> _demoApplianceTiles() {
+  return const [
+    ApplianceTile(
+      icon: Icons.ac_unit,
+      name: 'Air Conditioner',
+      source: 'Measured - Dedicated CT clamp',
+      watts: '900W',
+      cost: 'RM43.20 this month',
+      chips: ['Empty room', 'RM3.50/month if repeated daily'],
+      chipColor: AppTheme.red,
+    ),
+    ApplianceTile(
+      icon: Icons.kitchen_outlined,
+      name: 'Fridge',
+      source: 'Estimated - NILM',
+      watts: '118W',
+      cost: '~RM18.70 this month',
+      chips: ['Health watch', 'UK-DALE baseline'],
+      chipColor: AppTheme.amber,
+    ),
+    ApplianceTile(
+      icon: Icons.rice_bowl_outlined,
+      name: 'Unknown load',
+      source: 'Signature library - 88% match',
+      watts: '620W',
+      cost: 'RM0.20/h at current band',
+      chips: ['Likely rice cooker', 'Tap to confirm'],
+      chipColor: AppTheme.amber,
+    ),
+    ApplianceTile(
+      icon: Icons.coffee_maker_outlined,
+      name: 'Kettle',
+      source: 'Estimated - NILM',
+      watts: '0W',
+      cost: '~RM4.70 this month',
+      chips: ['Normal routine'],
+      chipColor: AppTheme.green,
+    ),
+  ];
 }
