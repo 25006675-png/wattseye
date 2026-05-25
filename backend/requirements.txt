@@ -3,3 +3,9 @@ joblib>=1.4
 reportlab>=4.2
 scikit-learn>=1.5
 torch>=2.3
+
+# Live hardware pipeline (Raspberry Pi). paho-mqtt is also needed on any machine
+# that runs pi_bridge.py or ads1115_reader.py with MQTT.
+paho-mqtt>=2.0
+# Pi-only: reads the ADS1115 over I2C. Skip on dev machines / --simulate mode.
+adafruit-circuitpython-ads1x15>=2.2 ; platform_machine == "armv7l" or platform_machine == "aarch64"

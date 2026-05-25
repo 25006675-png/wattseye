@@ -35,7 +35,7 @@ def generate_cards(snap: HomeSnapshot, surface_count: int = 2,
         include_weather: if True and snap.today_temp_c is None, fetch via Open-Meteo
         push_whatsapp: if True, also push eligible surfaced cards via WhatsApp
                        (subset defined by whatsapp.PUSH_ARCHETYPES — see whatsapp.md §2)
-        whatsapp_dry_run: if push_whatsapp=True, render but don't actually call Twilio
+        whatsapp_dry_run: if push_whatsapp=True, render but don't actually call Meta
     """
     if include_weather and snap.today_temp_c is None:
         fc = get_forecast_safe(snap.city)

@@ -1,7 +1,7 @@
-"""WhatsApp delivery for Coach cards via Twilio.
+"""WhatsApp delivery for Coach cards via the Meta WhatsApp Cloud API.
 
 Runs on the Pi as part of the Coach pipeline. The Pi never hosts WhatsApp
-itself — it POSTs to Twilio's REST API; Twilio delivers the message and
+itself — it POSTs to Meta's Graph API; Meta delivers the message and
 relays replies via webhook.
 
 Flow:
@@ -12,20 +12,25 @@ Flow:
         ↓
   (optional) LLM rephrases into Manglish using the structured Card as input
         ↓
-  Twilio REST API: POST /Messages.json
+  Meta Graph API: POST /{PHONE_NUMBER_ID}/messages
         ↓
-  Twilio → user's WhatsApp
+  Meta → user's WhatsApp
         ↓
   user replies "YES" / "NO" / "LATER"
         ↓
-  Twilio POSTs to our /webhook/whatsapp endpoint (see whatsapp_webhook.py)
+  Meta POSTs JSON to our /webhook/whatsapp endpoint (see whatsapp_webhook.py)
 
-Setup (one-time, on Twilio side):
-  1. twilio.com → free account
-  2. Console → Messaging → Try it out → Send a WhatsApp message
-  3. Note ACCOUNT_SID, AUTH_TOKEN, sandbox WhatsApp number (e.g. +14155238886)
-  4. Text the join code from your phone to opt in
+Setup (one-time, on Meta side):
+  1. business.facebook.com → create a (free) Business account
+  2. developers.facebook.com/apps → create app (Other → Business)
+  3. Add the WhatsApp product → note the Phone Number ID + access token
+  4. Add your phone as a verified test recipient (up to 5, free)
   5. Set env vars in .env on the Pi (see SETUP_ENV_VARS below)
+
+Note on the 24h window: free-form text messages only deliver if the recipient
+has messaged the number within the last 24h. Have the phone send any message
+to the Meta number first to open the window. Templates (e.g. hello_world)
+bypass the window but need pre-approval — see send_template().
 
 Only archetypes 1 (left_on_empty), 5 (rp4_tier_cliff), 11 (anomaly_with_action)
 trigger a push by default. Everything else stays in-app only. See whatsapp.md
@@ -37,9 +42,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import urllib.parse
 import urllib.request
-from base64 import b64encode
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,10 +56,9 @@ log = logging.getLogger("wattseye.whatsapp")
 
 # Env vars the Pi must have set (in .env or systemd unit)
 SETUP_ENV_VARS = [
-    "TWILIO_ACCOUNT_SID",       # ACxxxxxxxxxxxxxxxxxxxx
-    "TWILIO_AUTH_TOKEN",        # 32-char hex
-    "TWILIO_WHATSAPP_FROM",     # e.g. "whatsapp:+14155238886" (sandbox)
-    "TWILIO_WHATSAPP_TO",       # e.g. "whatsapp:+60123456789"
+    "META_ACCESS_TOKEN",        # EAA... (temp 24h or permanent system-user token)
+    "META_PHONE_NUMBER_ID",     # long numeric ID from the WhatsApp API Setup page
+    "META_RECIPIENT",           # e.g. "60195613440" (no '+' or 'whatsapp:' prefix)
 ]
 
 
@@ -93,51 +95,74 @@ MIN_PUSH_INTERVAL_MIN = 60
 SENT_LOG_PATH = Path(__file__).resolve().parent / "_whatsapp_sent.json"
 
 
-# ---------- Twilio REST client (no SDK dependency) ----------
+# ---------- Meta WhatsApp Cloud API client (no SDK dependency) ----------
 
-TWILIO_API_BASE = "https://api.twilio.com/2010-04-01"
+# Graph API version. Meta keeps versions live for ~2 years; bump when convenient.
+META_GRAPH_VERSION = "v21.0"
+META_GRAPH_BASE = "https://graph.facebook.com"
 
 
 @dataclass(frozen=True)
-class TwilioConfig:
-    account_sid: str
-    auth_token: str
-    from_number: str             # "whatsapp:+1..."
-    default_to: str              # "whatsapp:+60..."
+class MetaConfig:
+    access_token: str
+    phone_number_id: str         # numeric ID, NOT the display phone number
+    default_to: str              # bare digits, e.g. "60195613440"
 
     @classmethod
-    def from_env(cls) -> "TwilioConfig | None":
+    def from_env(cls) -> "MetaConfig | None":
         try:
             return cls(
-                account_sid=os.environ["TWILIO_ACCOUNT_SID"],
-                auth_token=os.environ["TWILIO_AUTH_TOKEN"],
-                from_number=os.environ["TWILIO_WHATSAPP_FROM"],
-                default_to=os.environ["TWILIO_WHATSAPP_TO"],
+                access_token=os.environ["META_ACCESS_TOKEN"],
+                phone_number_id=os.environ["META_PHONE_NUMBER_ID"],
+                default_to=os.environ["META_RECIPIENT"],
             )
         except KeyError as e:
             log.warning("Missing env var %s — WhatsApp send disabled", e)
             return None
 
 
-def _twilio_send(cfg: TwilioConfig, body: str, to: str | None = None) -> dict:
-    """Low-level Twilio REST call. Returns parsed JSON on success."""
-    url = f"{TWILIO_API_BASE}/Accounts/{cfg.account_sid}/Messages.json"
-    payload = urllib.parse.urlencode({
-        "From": cfg.from_number,
-        "To": to or cfg.default_to,
-        "Body": body,
-    }).encode()
-    auth = b64encode(f"{cfg.account_sid}:{cfg.auth_token}".encode()).decode()
+def _meta_post(cfg: MetaConfig, payload: dict) -> dict:
+    """Low-level Graph API POST to the messages endpoint. Returns parsed JSON."""
+    url = f"{META_GRAPH_BASE}/{META_GRAPH_VERSION}/{cfg.phone_number_id}/messages"
+    data = json.dumps(payload).encode()
     req = urllib.request.Request(
-        url, data=payload, method="POST",
+        url, data=data, method="POST",
         headers={
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Bearer {cfg.access_token}",
+            "Content-Type": "application/json",
             "User-Agent": "WattsEye/0.1",
         },
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode())
+
+
+def _meta_send(cfg: MetaConfig, body: str, to: str | None = None) -> dict:
+    """Send a free-form text message. Requires an open 24h conversation window."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to or cfg.default_to,
+        "type": "text",
+        "text": {"preview_url": False, "body": body},
+    }
+    return _meta_post(cfg, payload)
+
+
+def _meta_send_template(cfg: MetaConfig, template: str = "hello_world",
+                        lang_code: str = "en_US", to: str | None = None) -> dict:
+    """Send a pre-approved template message — bypasses the 24h window.
+
+    Use 'hello_world' (always available) to confirm wiring before the window
+    is open. Custom templates need Meta approval before they can be sent.
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to or cfg.default_to,
+        "type": "template",
+        "template": {"name": template, "language": {"code": lang_code}},
+    }
+    return _meta_post(cfg, payload)
 
 
 # ---------- rate limiting / dedup ----------
@@ -315,8 +340,8 @@ def send_card_via_whatsapp(card: Card, *, now: datetime | None = None,
     Args:
         card: the Coach Card to send
         now: override timestamp (for testing); defaults to datetime.now()
-        use_llm: if True and ANTHROPIC_API_KEY is set, rephrase via LLM
-        dry_run: if True, render but do not actually call Twilio
+        use_llm: if True and GEMINI_API_KEY is set, rephrase via LLM
+        dry_run: if True, render but do not actually call Meta
     """
     now = now or datetime.now()
 
@@ -329,19 +354,20 @@ def send_card_via_whatsapp(card: Card, *, now: datetime | None = None,
     if dry_run:
         return {"sent": False, "reason": "dry_run", "body": body, "archetype": card.archetype_key}
 
-    cfg = TwilioConfig.from_env()
+    cfg = MetaConfig.from_env()
     if cfg is None:
-        return {"sent": False, "reason": "missing twilio env vars", "body": body,
+        return {"sent": False, "reason": "missing meta env vars", "body": body,
                 "archetype": card.archetype_key, "setup_needed": SETUP_ENV_VARS}
 
     try:
-        result = _twilio_send(cfg, body)
+        result = _meta_send(cfg, body)
         _record_push(card, now)
-        return {"sent": True, "twilio_sid": result.get("sid"),
+        msg_id = (result.get("messages") or [{}])[0].get("id")
+        return {"sent": True, "message_id": msg_id,
                 "archetype": card.archetype_key, "body": body}
     except Exception as e:
-        log.error("Twilio send failed: %s", e)
-        return {"sent": False, "reason": f"twilio error: {e}",
+        log.error("Meta send failed: %s", e)
+        return {"sent": False, "reason": f"meta error: {e}",
                 "archetype": card.archetype_key, "body": body}
 
 
@@ -367,12 +393,28 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", default=True,
-                        help="Render messages but don't call Twilio")
+                        help="Render messages but don't call Meta")
     parser.add_argument("--send", action="store_true",
                         help="Actually send — overrides --dry-run")
     parser.add_argument("--no-llm", action="store_true",
                         help="Skip LLM rephrase, use deterministic template")
+    parser.add_argument("--hello", action="store_true",
+                        help="Send Meta's hello_world template to confirm wiring "
+                             "(bypasses the 24h window) and exit")
     args = parser.parse_args()
+
+    if args.hello:
+        cfg = MetaConfig.from_env()
+        if cfg is None:
+            print(f"Missing env vars. Need: {', '.join(SETUP_ENV_VARS)}")
+            raise SystemExit(1)
+        try:
+            res = _meta_send_template(cfg)
+            print(f"hello_world sent -> id={(res.get('messages') or [{}])[0].get('id')}")
+        except Exception as e:
+            print(f"send failed: {e}")
+            raise SystemExit(1)
+        raise SystemExit(0)
 
     cards = generate_cards(_demo_snapshot(), surface_count=4, include_weather=False)
     results = push_eligible_cards(

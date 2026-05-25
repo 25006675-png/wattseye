@@ -1,4 +1,4 @@
-"""Flask webhook endpoint that receives Twilio WhatsApp replies.
+"""Flask webhook endpoint that receives Meta WhatsApp Cloud API replies.
 
 Two-stage classifier:
 
@@ -19,11 +19,21 @@ This gives instant response on clear replies, and graceful handling of free-text
 and Manglish/Malay variations that aren't in the keyword set ("tak nak",
 "ok turn it off la", "k", etc.) without ever silently doing the wrong thing.
 
+Meta differs from Twilio in three ways, all handled below:
+  1. GET verification: when you subscribe the webhook, Meta sends a GET with
+     hub.mode / hub.verify_token / hub.challenge. We echo hub.challenge back
+     verbatim iff hub.verify_token matches $META_VERIFY_TOKEN.
+  2. POST payloads are JSON (not form-encoded), nested under entry[].changes[].
+  3. Replies are NOT returned in the HTTP response (no TwiML). We return 200 to
+     ack receipt, then POST the acknowledgement back via the Graph API.
+
 Deploy:
   - Run on the Pi on port 8080
   - Expose via ngrok (`ngrok http 8080`)
-  - Paste the public URL into Twilio Console → Messaging → Sandbox settings
-    → "When a message comes in" → `https://<your-host>/webhook/whatsapp`
+  - In the Meta App dashboard → WhatsApp → Configuration → Webhook:
+      Callback URL: `https://<your-host>/webhook/whatsapp`
+      Verify token: must equal $META_VERIFY_TOKEN
+    then Subscribe to the `messages` field.
 """
 
 from __future__ import annotations
@@ -42,8 +52,9 @@ except ImportError:
     Response = None  # type: ignore
     request = None  # type: ignore
 
-# Reuse the dotenv loader from whatsapp.py so we get GEMINI_API_KEY etc.
-from .whatsapp import _load_dotenv  # noqa: F401 — import side-effect loads .env
+# Reuse the dotenv loader (import side-effect loads .env) + the Meta sender,
+# so the webhook can POST acknowledgements back through the same Graph API path.
+from .whatsapp import MetaConfig, _load_dotenv, _meta_send  # noqa: F401
 
 log = logging.getLogger("wattseye.whatsapp.webhook")
 
@@ -242,20 +253,44 @@ def compose_ack(classification: dict) -> str:
     return _ACK_HIGH["unknown"]
 
 
-# ---------- TwiML ----------
+# ---------- Meta payload parsing ----------
 
-def _xml_escape(text: str) -> str:
-    """Escape XML special chars and strip any non-ASCII that may upset Twilio's parser."""
-    return (text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace('"', "&quot;")
-                .replace("'", "&apos;"))
+def extract_messages(payload: dict) -> list[dict]:
+    """Pull inbound text messages out of Meta's webhook JSON.
+
+    Meta nests messages under entry[].changes[].value.messages[]. The same
+    webhook also delivers delivery/read *status* events (value.statuses) which
+    carry no user text — those are ignored. Returns a list of
+    {"from": <wa_id>, "text": <body>} for genuine inbound text messages.
+    """
+    out: list[dict] = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            for msg in value.get("messages", []):
+                if msg.get("type") != "text":
+                    continue
+                out.append({
+                    "from": msg.get("from", ""),
+                    "text": (msg.get("text") or {}).get("body", ""),
+                })
+    return out
 
 
-def twiml_reply(text: str) -> str:
-    return (f'<?xml version="1.0" encoding="UTF-8"?>'
-            f'<Response><Message>{_xml_escape(text)}</Message></Response>')
+def _send_ack(ack_text: str, to: str) -> None:
+    """POST the acknowledgement back to the user via the Graph API.
+
+    Best-effort: if Meta env vars are missing or the call fails, we log and
+    move on — the inbound reply has already been recorded either way.
+    """
+    cfg = MetaConfig.from_env()
+    if cfg is None:
+        log.warning("ack not sent — Meta env vars missing")
+        return
+    try:
+        _meta_send(cfg, ack_text, to=to or None)
+    except Exception as e:
+        log.warning("ack send failed (%s)", e)
 
 
 # ---------- Flask app ----------
@@ -266,20 +301,43 @@ def create_app():
 
     app = Flask(__name__)
 
+    @app.route("/webhook/whatsapp", methods=["GET"])
+    def whatsapp_verify():
+        # Meta webhook verification handshake.
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge", "")
+        expected = os.environ.get("META_VERIFY_TOKEN")
+        if mode == "subscribe" and expected and token == expected:
+            log.info("webhook verified")
+            return Response(challenge, mimetype="text/plain")
+        log.warning("webhook verification failed (mode=%s token_match=%s)",
+                    mode, token == expected)
+        return Response("verification failed", status=403)
+
     @app.route("/webhook/whatsapp", methods=["POST"])
     def whatsapp_webhook():
-        body = request.form.get("Body", "")
-        from_number = request.form.get("From", "")
-        log.info("whatsapp reply from=%s body=%r", from_number, body)
+        payload = request.get_json(silent=True) or {}
+        messages = extract_messages(payload)
+        if not messages:
+            # Status callback (delivered/read) or non-text message — ack and skip.
+            return Response(status=200)
 
-        archetype = _most_recent_pushed_archetype()
-        classification = classify_reply(body)
-        log.info("classified intent=%s conf=%.2f stage=%s reason=%r",
-                 classification["intent"], classification["confidence"],
-                 classification["stage"], classification.get("reason", ""))
+        for msg in messages:
+            from_number = msg["from"]
+            body = msg["text"]
+            log.info("whatsapp reply from=%s body=%r", from_number, body)
 
-        record_user_action(archetype or "unknown", classification, body, from_number)
-        return Response(twiml_reply(compose_ack(classification)), mimetype="text/xml")
+            archetype = _most_recent_pushed_archetype()
+            classification = classify_reply(body)
+            log.info("classified intent=%s conf=%.2f stage=%s reason=%r",
+                     classification["intent"], classification["confidence"],
+                     classification["stage"], classification.get("reason", ""))
+
+            record_user_action(archetype or "unknown", classification, body, from_number)
+            _send_ack(compose_ack(classification), from_number)
+
+        return Response(status=200)
 
     @app.route("/healthz", methods=["GET"])
     def healthz():
@@ -322,5 +380,6 @@ if __name__ == "__main__":
     else:
         app = create_app()
         print(f"WattsEye WhatsApp webhook listening on http://{args.host}:{args.port}/webhook/whatsapp")
-        print("Expose via: ngrok http 8080  (paste the https URL into Twilio sandbox settings)")
+        print("Expose via: ngrok http 8080  (set the https URL as the Meta webhook Callback URL,")
+        print("            verify token = $META_VERIFY_TOKEN, then subscribe to the 'messages' field)")
         app.run(host=args.host, port=args.port)

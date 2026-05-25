@@ -31,14 +31,22 @@ from ML.insights.coach.coach_engine import (  # noqa: E402
 )
 from ML.insights.coach.whatsapp import (  # noqa: E402
     SETUP_ENV_VARS,
-    TwilioConfig,
+    MetaConfig,
     send_card_via_whatsapp,
 )
+from backend.live_state import read_live_state  # noqa: E402
 
 USER_ACTIONS: dict[str, str] = {}
 
 
 def dashboard_payload() -> dict[str, Any]:
+    # Live data wins when the Pi runtime (pi_bridge.py) is publishing a fresh
+    # live_state.json; otherwise fall back to the built-in demo snapshot. The
+    # app flips its "Demo data" / "Live Pi" chip purely on the JSON it sees.
+    live = read_live_state()
+    if live is not None:
+        return live
+
     snap = _demo_snapshot()
     return {
         "timestamp": snap.timestamp.isoformat(timespec="seconds"),
@@ -183,7 +191,7 @@ def nilm_infer_payload(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def whatsapp_status_payload() -> dict[str, Any]:
-    configured = TwilioConfig.from_env() is not None
+    configured = MetaConfig.from_env() is not None
     missing = [name for name in SETUP_ENV_VARS if not os.environ.get(name)]
     return {
         "configured": configured,

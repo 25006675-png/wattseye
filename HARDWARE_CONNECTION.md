@@ -28,7 +28,7 @@ wherever the purchased part differs from what those files assumed.
 11. [Subsystem G — IR transmit (AC cutoff command)](#11-subsystem-g--ir-transmit-ac-cutoff-command)
 12. [Subsystem H — IR receive / learn codes (VS1838B)](#12-subsystem-h--ir-receive--learn-codes-vs1838b)
 13. [Subsystem I — Relay (live cutoff for the demo)](#13-subsystem-i--relay-live-cutoff-for-the-demo)
-14. [End-to-end data flow into the app](#14-end-to-end-data-flow-into-the-app)
+14. [End-to-end software: the live pipeline](#14-end-to-end-software-the-live-pipeline)
 15. [Bring-up and test order](#15-bring-up-and-test-order)
 16. [Calibration](#16-calibration)
 17. [Repo file reference index](#17-repo-file-reference-index)
@@ -371,10 +371,23 @@ power-factor correction. See [`ML/sensing/README.md`](ML/sensing/README.md) and
 [`plan/02 §10a`](plan/02_HARDWARE.md) for *why* it works this way (the ADS1115's
 ~250 SPS/channel gives RMS magnitude, not instantaneous real power).
 
-### 9.1 New file to add: a live reader on the Pi
+### 9.1 The live reader on the Pi — `ML/sensing/ads1115_reader.py`
 
-This is the only hardware-specific glue not yet in the repo. Create
-`ML/sensing/ads1115_reader.py`:
+**This file now ships in the repo.** It reads A0/A1/A2, computes a
+`PowerReading`, PF-corrects it, and **publishes once per second to the MQTT
+topic `wattseye/power`** (see [§14](#14-end-to-end-software-the-live-pipeline) for
+the full pipeline). It also has a **`--simulate`** mode that generates synthetic
+50 Hz samples so you can run the whole chain on a laptop with no ADC and no
+adafruit libraries:
+
+```bash
+python -m ML.sensing.ads1115_reader --simulate --no-mqtt --count 3   # print, no hardware
+python -m ML.sensing.ads1115_reader                                  # real ADC + MQTT
+```
+
+The original inline sketch below is kept for reference; the shipped file is a
+superset of it (adds MQTT publish, `--simulate`/`--no-mqtt`, and a steady cadence
+loop). To recreate it from scratch you would write `ML/sensing/ads1115_reader.py`:
 
 ```python
 """Read SCT-013 + ZMPT101B via ADS1115 and emit a PowerReading once per second.
@@ -664,46 +677,143 @@ the AC branch drop to ~0 → dashboard confirms. This is **Milestone 2** in
 
 ---
 
-## 14. End-to-end data flow into the app
+## 14. End-to-end software: the live pipeline
 
-The backend currently serves a **demo snapshot**; the hardware replaces it at one
-well-marked seam.
+The software glue the earlier plan only *described* now exists in the repo. This
+section is the contract and run-book for it.
 
-- The API the Flutter app consumes is [`backend/api_server.py`](backend/api_server.py).
-- The function to replace with live data is **`dashboard_payload()`** at
-  [`backend/api_server.py:41`](backend/api_server.py) — the
-  [`backend/README.md`](backend/README.md) explicitly says: *"Replace
-  `dashboard_payload()` with live Pi sensor/database data when the hardware
-  pipeline is ready; keep the JSON keys the same so the Flutter app continues to
-  work."*
+### 14.1 The files that make the hardware live
 
-Wiring the hardware in:
+| File | Runs on | Role |
+|---|---|---|
+| [`ML/sensing/ads1115_reader.py`](ML/sensing/ads1115_reader.py) | Pi | Read ADS1115 → `PowerReading` → publish `wattseye/power` (1 Hz). Has `--simulate`. |
+| [`backend/pi_bridge.py`](backend/pi_bridge.py) | Pi | Subscribe power + occupancy → empty-room decision → publish `wattseye/ac/command` → write `live_state.json`. Has `--self-test`. |
+| [`backend/live_state.py`](backend/live_state.py) | Pi | The seam: atomic read/write of the dashboard live-state file (shared by the bridge and the API). |
+| [`backend/api_server.py`](backend/api_server.py) | Pi | `dashboard_payload()` serves `live_state.json` when fresh, else the demo snapshot. |
+| [`firmware/esp32_node/esp32_node.ino`](firmware/esp32_node/esp32_node.ino) | ESP32 | Publish `wattseye/occupancy`; on `wattseye/ac/command` fire IR + relay. |
+| [`firmware/arduino_ir_learn/arduino_ir_learn.ino`](firmware/arduino_ir_learn/arduino_ir_learn.ino) | Arduino | One-time capture of the real AC remote's IR codes. |
+
+The **seam** the old plan flagged is closed: `dashboard_payload()` no longer
+hard-codes demo numbers — it calls `read_live_state()` first and only falls back
+to the demo snapshot when the Pi runtime isn't publishing. The JSON keys are
+unchanged, so the Flutter app needs zero changes; it flips its **"Demo data" →
+"Live Pi"** chip automatically (see `_refreshBackendData()` in
+[`wattseye_app/lib/main.dart`](wattseye_app/lib/main.dart),
+[`wattseye_app/lib/api.dart`](wattseye_app/lib/api.dart)).
+
+### 14.2 MQTT contract (the spine between all devices)
+
+All inter-device messaging is MQTT over the LAN, broker = **Mosquitto on the Pi**.
+The contract is defined once and mirrored in the file headers of
+`ads1115_reader.py`, `pi_bridge.py`, and `esp32_node.ino`.
+
+| Topic | Publisher → Subscriber | Payload |
+|---|---|---|
+| `wattseye/power` | reader → bridge | `{"ts","vrms","main_watts","ac_watts","residual_watts","irms_main","irms_ac"}` |
+| `wattseye/occupancy` | ESP32 → bridge | `{"occupied":bool,"room":"living","ts":millis}` |
+| `wattseye/ac/command` | bridge → ESP32 | `{"command":"off"\|"on","reason":"empty_room_waste","ts":...}` |
+| `wattseye/ac/state` | ESP32 → bridge | `{"relay":"on"\|"off","ir_sent":bool,"ts":millis}` |
+
+The empty-room decision reuses the shipped thresholds in
+[`ML/insights/occupancy_engine.py`](ML/insights/occupancy_engine.py)
+(`HIGH_POWER_WATTS = 700`, `EMPTY_ROOM_MINUTES = 10`), so the live cutoff behaves
+exactly like the demo/insight path. The cutoff is debounced — one command per
+empty episode, re-armed when the room is re-occupied.
+
+### 14.3 Data flow (as built)
 
 ```text
-ads1115_reader.py (§9)  →  PowerReading every 1s
+ SCT-013 ×2 + ZMPT101B
+        │ (analog)
+   ADS1115 (I²C)
         │
-        ▼
-real_power_breakdown()  →  {ac: W, residual NILM split: W...}   (power_math.py)
-        │
-        ▼
-insight_orchestrator.py →  cost / occupancy / health / routine engines
-        │
-        ▼
-dashboard_payload() in backend/api_server.py  (swap demo snapshot for live values)
-        │  GET /api/dashboard  (JSON contract unchanged)
-        ▼
-Flutter app  (lib/api.dart → DashboardSnapshot)  shows "Live Pi" chip
+ ads1115_reader.py ──(MQTT wattseye/power)──┐
+                                            ▼
+ ESP32 LD2410C ──(MQTT wattseye/occupancy)─► pi_bridge.py ─► live_state.json
+                                            │                       │
+              ◄─(MQTT wattseye/ac/command)──┘                       │ read_live_state()
+ ESP32: IR LED + relay  → AC-SIM socket off                         ▼
+                                                       api_server.py  GET /api/dashboard
+                                                                    │ (JSON unchanged)
+                                                                    ▼
+                                                       Flutter app → "Live Pi" chip
 ```
 
-The app already flips its status chip from **"Demo data"** to **"Live Pi"** the
-moment `/api/dashboard` returns live values — see `_refreshBackendData()` in
-[`wattseye_app/lib/main.dart`](wattseye_app/lib/main.dart) and the typed client
-in [`wattseye_app/lib/api.dart`](wattseye_app/lib/api.dart). No app changes are
-needed as long as the JSON keys stay the same.
+The WhatsApp alert path (Coach cards → Meta Cloud API) is independent and already
+wired through `backend/api_server.py` (`/api/whatsapp/send`) — it is **not** part
+of the MQTT control loop, per the separation rule in
+[`plan/07_TASK_BREAKDOWN.md`](plan/07_TASK_BREAKDOWN.md).
 
-Occupancy and relay/IR events from the ESP32 reach the Pi over WiFi/MQTT and feed
-the same orchestrator; the WhatsApp alert path is already wired through
-[`backend/api_server.py`](backend/api_server.py) (`/api/whatsapp/send`).
+### 14.4 Run the software pipeline (laptop, no hardware)
+
+Prove the whole chain before any wiring:
+
+```bash
+# 1. decision + live-state logic (no broker, no hardware)
+python -m backend.pi_bridge --self-test
+
+# 2. synthetic power readings to stdout
+python -m ML.sensing.ads1115_reader --simulate --no-mqtt --count 3
+
+# 3. full loop with a local broker:
+#    terminal A:  mosquitto
+#    terminal B:  python -m backend.pi_bridge
+#    terminal C:  python -m ML.sensing.ads1115_reader --simulate
+#    terminal D:  python backend/api_server.py   → GET /api/dashboard shows "source":"live_pi"
+```
+
+### 14.5 Deploy to the Raspberry Pi
+
+The models and all Python ship **with the repo** — there is no separate "upload
+models" step; cloning the repo brings `ML/NILM/*.pth`, `ML/anomaly/*.joblib`, and
+`ML/routine/*.joblib` along. The runtime *strategy* (PyTorch inference, benchmark,
+optimise) is in [`plan/03_MACHINE_LEARNING.md §15`](plan/03_MACHINE_LEARNING.md).
+The steps below are the missing "how":
+
+```bash
+# --- 1. OS prep ---
+sudo raspi-config        # Interface Options → I2C → Enable;  then: sudo reboot
+sudo apt-get update && sudo apt-get install -y python3-pip i2c-tools git mosquitto mosquitto-clients
+i2cdetect -y 1           # expect "48" — the ADS1115
+
+# --- 2. broker (Mosquitto) ---
+sudo systemctl enable --now mosquitto      # listens on 127.0.0.1:1883 by default
+# allow the ESP32 (LAN) to connect: create /etc/mosquitto/conf.d/wattseye.conf with
+#   listener 1883 0.0.0.0
+#   allow_anonymous true     # demo only; add a password for anything real
+sudo systemctl restart mosquitto
+
+# --- 3. code + Python deps ---
+git clone <your-repo-url> wattseye && cd wattseye
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+> ⚠️ **Installing PyTorch on a Pi is the one genuinely fiddly step.** A plain
+> `pip install torch` often fails or pulls a wheel that won't run on ARM. Options,
+> in order of preference:
+> 1. **Use a Pi OS (64-bit)** and `pip install torch` — recent versions have
+>    `aarch64` wheels on PyPI. Verify with `python -c "import torch; print(torch.__version__)"`.
+> 2. If that fails, install the distro build: `sudo apt-get install python3-torch`
+>    (older but works), or a prebuilt community wheel for your exact Python/arch.
+> 3. The NILM models are small Transformers — CPU inference is fine; you do **not**
+>    need CUDA/GPU anything.
+>
+> Benchmark before relying on it: `python ML/NILM/test_nilm_inference.py --all`
+> (see `plan/03 §15` for the speed budget and the TorchScript/quantization fallback).
+
+```bash
+# --- 4. calibrate (once) --- see §16; set scales in ML/sensing/ads1115_reader.py
+# --- 5. run the three services ---
+python backend/api_server.py            # serves the app + WhatsApp
+python -m backend.pi_bridge             # the brain
+python -m ML.sensing.ads1115_reader     # live sensing (drop --simulate on real hardware)
+```
+
+For an always-on demo, wrap each in a **systemd** unit (`Restart=always`,
+`After=mosquitto.service`, `WorkingDirectory=/home/pi/wattseye`,
+`ExecStart=/home/pi/wattseye/.venv/bin/python -m backend.pi_bridge`). One unit
+each for `api_server`, `pi_bridge`, and `ads1115_reader`.
 
 ---
 
@@ -730,6 +840,18 @@ Follow this sequence (expanded from [`plan/02 §16`](plan/02_HARDWARE.md)). Do
 10. **Live cutoff:** trigger IR → relay opens → AC-SIM dies → A2 → ~0 on the
     dashboard. (Milestone 2.)
 11. **Calibrate** (next section).
+
+**Software bring-up (interleaves with the above — see [§14.4](#144-run-the-software-pipeline-laptop-no-hardware)–[§14.5](#145-deploy-to-the-raspberry-pi)):**
+
+- a. On any laptop first: `python -m backend.pi_bridge --self-test` and
+  `python -m ML.sensing.ads1115_reader --simulate --no-mqtt --count 3` — confirms
+  the decision logic + power math with zero hardware.
+- b. On the Pi: install Mosquitto, deps, and (carefully) PyTorch — [§14.5](#145-deploy-to-the-raspberry-pi).
+- c. Flash the ESP32 ([`firmware/README.md`](firmware/README.md)); watch it publish
+  `wattseye/occupancy` and react to a manual
+  `mosquitto_pub -t wattseye/ac/command -m '{"command":"off"}'`.
+- d. Start `api_server.py`, `pi_bridge.py`, `ads1115_reader.py`; confirm
+  `GET /api/dashboard` returns `"source":"live_pi"` and the app shows the **Live Pi** chip.
 
 ---
 
@@ -768,10 +890,15 @@ inverter ACs, the upgrade path (MCP3008 or PZEM-004T/ADE7953) is documented in
 | Live data flow + PF reasoning (§5) | [`plan/04_LIVE_DATA_FLOW.md`](plan/04_LIVE_DATA_FLOW.md) |
 | Demo plan (loads, milestones) | [`plan/06_DEMO_PLAN.md`](plan/06_DEMO_PLAN.md) |
 | Power math (RMS, apparent power, PF table, calibration) | [`ML/sensing/power_math.py`](ML/sensing/power_math.py), [`ML/sensing/README.md`](ML/sensing/README.md) |
-| Live reader to add on the Pi | `ML/sensing/ads1115_reader.py` (new — see [§9](#9-subsystem-e--reading-samples-and-computing-power)) |
+| Live ADC reader (ships, has `--simulate`) | [`ML/sensing/ads1115_reader.py`](ML/sensing/ads1115_reader.py) — see [§9.1](#91-the-live-reader-on-the-pi--mlsensingads1115_readerpy), [§14](#14-end-to-end-software-the-live-pipeline) |
+| Pi brain: MQTT → decision → live state (has `--self-test`) | [`backend/pi_bridge.py`](backend/pi_bridge.py) |
+| Live-state seam (read/write) | [`backend/live_state.py`](backend/live_state.py) |
+| ESP32 / Arduino firmware | [`firmware/`](firmware/) ([`README`](firmware/README.md)) |
+| MQTT contract | [§14.2](#142-mqtt-contract-the-spine-between-all-devices) |
+| Pi deployment + PyTorch-on-ARM | [§14.5](#145-deploy-to-the-raspberry-pi), [`plan/03_MACHINE_LEARNING.md §15`](plan/03_MACHINE_LEARNING.md) |
 | Insight orchestration | [`ML/insights/insight_orchestrator.py`](ML/insights/insight_orchestrator.py) |
 | Occupancy logic | [`ML/insights/occupancy_engine.py`](ML/insights/occupancy_engine.py) |
-| Backend API + the seam to replace with live data | [`backend/api_server.py`](backend/api_server.py) (`dashboard_payload()`, line 41), [`backend/README.md`](backend/README.md) |
+| Backend API + the live-data seam | [`backend/api_server.py`](backend/api_server.py) (`dashboard_payload()`), [`backend/README.md`](backend/README.md) |
 | Flutter app data layer | [`wattseye_app/lib/api.dart`](wattseye_app/lib/api.dart), [`wattseye_app/lib/main.dart`](wattseye_app/lib/main.dart) |
 
 ---
