@@ -14,6 +14,9 @@ ML/insights/coach/_weather_cache/
 ML/insights/coach/_whatsapp_sent.json
 ML/insights/coach/_user_actions.json
 
+# Pi runtime state — written by pi_bridge.py, read by api_server.py
+backend/live_state.json
+
 # OS / editor / agent
 .DS_Store
 Thumbs.db
