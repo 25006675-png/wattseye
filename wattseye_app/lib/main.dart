@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'api.dart';
 import 'theme.dart';
@@ -616,6 +617,15 @@ class DashboardPage extends StatelessWidget {
         ? 'Away'
         : _titleCase(snapshot.occupancyState);
 
+    // AC hero: the product thesis (dedicated clamp + occupancy-aware cutoff).
+    final acList = appliances.where((a) => a.name == 'ac').toList();
+    final acWatts = acList.isNotEmpty
+        ? acList.first.watts
+        : (snapshot == null ? 900.0 : 0.0);
+    final acOn = acWatts > 5;
+    final away = (snapshot?.occupancyState ?? 'away').toLowerCase() == 'away';
+    final acAlert = acOn && away;
+
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: ListView(
@@ -625,6 +635,56 @@ class DashboardPage extends StatelessWidget {
             subtitle: backendOnline
                 ? 'Live from backend - ${_timeLabel(snapshot?.timestamp)}'
                 : 'Backend offline - showing demo data',
+          ),
+          const SizedBox(height: 12),
+          InfoCard(
+            accentColor: acAlert ? AppTheme.red : AppTheme.primary,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.ac_unit, color: AppTheme.primary, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(child: Overline('AIR CONDITIONER')),
+                    ChipLabel(
+                      text: away ? 'Room empty' : 'Occupied',
+                      color: away ? AppTheme.amber : AppTheme.green,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${acWatts.round()} W',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontSize: 34),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Measured directly - Dedicated CT clamp',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (acAlert) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Running in an empty room - cost adds up while nobody benefits.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppTheme.red,
+                    ),
+                  ),
+                ],
+                if (acOn) ...[
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: onTurnOff,
+                    icon: const Icon(Icons.power_settings_new, size: 18),
+                    label: const Text('Turn off AC'),
+                    style: FilledButton.styleFrom(backgroundColor: AppTheme.red),
+                  ),
+                ],
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           LivePowerCard(watts: livePowerW),
@@ -680,14 +740,6 @@ class DashboardPage extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    FilledButton.icon(
-                      onPressed: onTurnOff,
-                      icon: const Icon(Icons.power_settings_new, size: 18),
-                      label: const Text('Turn off'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTheme.red,
-                      ),
-                    ),
                     OutlinedButton.icon(
                       onPressed: () =>
                           onSendWhatsApp(topCard?.keyName ?? 'left_on_empty'),
@@ -1252,6 +1304,15 @@ class BillPage extends StatelessWidget {
                 SettingsRow(label: 'Source data', value: 'tnb_tariff.py'),
               ],
             ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () => launchUrl(
+              Uri.parse('$defaultApiBaseUrl/api/report/monthly?mode=summary'),
+              mode: LaunchMode.externalApplication,
+            ),
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            label: const Text('Download monthly report (PDF)'),
           ),
         ],
       ),
