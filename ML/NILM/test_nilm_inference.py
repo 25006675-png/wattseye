@@ -1,5 +1,15 @@
 """
-Live-style inference test for WattsEye NILM PyTorch checkpoints.
+Live-style inference *smoke test* for WattsEye NILM PyTorch checkpoints.
+
+WARNING - ACCURACY: the NILMGenerator below is an APPROXIMATE reconstruction,
+not the trained architecture. It (a) loads only the Generator sub-network, but
+the trained disaggregator is the **Discriminator**, and (b) uses the wrong
+hyper-parameters (heads/pooling/activation/window). The weights load because
+parameter names+shapes line up, but the forward pass computes a DIFFERENT
+function - its predicted_watts do NOT reproduce the reported F1/MAE.
+For faithful inference use ML/NILM/electricity_model.py (load_electricity); for
+the verified accuracy numbers see ML/NILM/eval/RESULTS.md. Keep this script only
+as a checkpoint-load + inference-latency check.
 
 This script answers the practical question after training/evaluation:
 "Can the saved .pth model load and produce a prediction from a rolling

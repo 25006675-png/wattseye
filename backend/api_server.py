@@ -34,7 +34,13 @@ from ML.insights.coach.whatsapp import (  # noqa: E402
     MetaConfig,
     send_card_via_whatsapp,
 )
+from ML.insights.coach.whatsapp_webhook import record_user_action  # noqa: E402
 from backend.live_state import read_live_state  # noqa: E402
+
+# In-app action vocabulary -> learning-loop intent vocabulary.
+# "none" means the user un-acted a card; we drop it from the loop log because
+# the prior intent (if any) stands until explicitly overridden.
+_APP_ACTION_TO_INTENT = {"do": "accept", "dismiss": "dismiss", "remind": "snooze"}
 
 USER_ACTIONS: dict[str, str] = {}
 
@@ -297,6 +303,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         USER_ACTIONS[archetype_key] = action
+
+        # Persist into the same log the WhatsApp webhook writes, so the
+        # feedback_loader pipes in-app dismisses/accepts into the ranker too.
+        intent = _APP_ACTION_TO_INTENT.get(action)
+        if intent is not None:
+            record_user_action(
+                archetype_key=archetype_key,
+                classification={"intent": intent, "confidence": 1.0, "stage": "app"},
+                raw_reply=action,
+                from_number="app",
+            )
         self._send_json({"ok": True})
 
     def log_message(self, fmt: str, *args: Any) -> None:

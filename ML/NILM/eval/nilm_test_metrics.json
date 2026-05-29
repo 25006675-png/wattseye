@@ -1,0 +1,27 @@
+{
+  "_about": "Verified UK-DALE unseen-house (House 2) test metrics for the shipped ML/NILM/*.pth checkpoints. Recomputed from the held-out test predictions with ML/NILM/eval/verify_f1.py. See RESULTS.md.",
+  "dataset": "UK-DALE",
+  "protocol": "unseen-house: train on all UK-DALE houses except House 2; test only on House 2 (kettle/fridge/washing_machine/television). Appliances present in a single house use an 80/20 chronological split.",
+  "model": "ELECTRIcity (Sykiotis et al., 2022) transformer seq2seq",
+  "model_config": {"window_size": 480, "window_stride": 240, "discriminator_hidden": 256, "generator_hidden": 64, "heads": 2, "n_layers": 2, "inference_network": "Discriminator"},
+  "sample_rate_seconds": 6,
+  "verified_on": "2026-05-29",
+  "appliances": {
+    "kettle":          {"f1": 0.9602, "precision": 0.9755, "recall": 0.9453, "accuracy": 0.9993, "mae_watts": 7.75,   "n_test": 1925760},
+    "fridge":          {"f1": 0.8581, "precision": 0.9109, "recall": 0.8110, "accuracy": 0.8832, "mae_watts": 19.96,  "n_test": 1513920},
+    "washing_machine": {"f1": 0.8022, "precision": 0.7692, "recall": 0.8381, "accuracy": 0.9945, "mae_watts": 4.21,   "n_test": 1513920},
+    "hair_dryer":      {"f1": 0.7615, "precision": 0.8651, "recall": 0.6801, "accuracy": 0.9883, "mae_watts": 22.30,  "n_test": 43200},
+    "iron":            {"f1": 0.6754, "precision": 0.6638, "recall": 0.6875, "accuracy": 0.9229, "mae_watts": 162.66, "n_test": 960}
+  },
+  "preprocessing": {
+    "normalize": "mean (x_norm = (watts - x_mean)/x_std, UK-DALE x_mean~=522, x_std~=814)",
+    "cutoff_watts":   {"kettle": 3100, "fridge": 300, "washing_machine": 2500, "hair_dryer": 2500, "iron": 2500},
+    "on_threshold_w": {"kettle": 2000, "fridge": 50,  "washing_machine": 20,   "hair_dryer": 800,  "iron": 1000},
+    "min_on":         {"kettle": 2,    "fridge": 10,  "washing_machine": 300,  "hair_dryer": 2,    "iron": 2},
+    "min_off":        {"kettle": 0,    "fridge": 2,   "washing_machine": 26,   "hair_dryer": 0,    "iron": 0}
+  },
+  "caveats": {
+    "hair_dryer_iron": "Hair dryer (43,200 test samples) and iron (960) have small test supports in UK-DALE House 2 — their F1 is noisier than kettle/fridge/washing_machine.",
+    "ground_truth": "These are dataset-vs-model accuracy figures, not live-demo accuracy. Real-home performance requires sensor calibration and fine-tuning (see plan/03)."
+  }
+}

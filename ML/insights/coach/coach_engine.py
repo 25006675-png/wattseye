@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from .correlator import correlate
+from .feedback_loader import apply_feedback_to_snapshot
 from .quantifier import quantify
 from .ranker import rank
 from .situations import Card, HomeSnapshot
@@ -26,7 +27,8 @@ from .weather import get_forecast_safe
 def generate_cards(snap: HomeSnapshot, surface_count: int = 2,
                    include_weather: bool = True,
                    push_whatsapp: bool = False,
-                   whatsapp_dry_run: bool = False) -> list[Card]:
+                   whatsapp_dry_run: bool = False,
+                   apply_feedback: bool = True) -> list[Card]:
     """Run the full pipeline. Returns scored cards sorted highest first.
 
     Args:
@@ -36,7 +38,13 @@ def generate_cards(snap: HomeSnapshot, surface_count: int = 2,
         push_whatsapp: if True, also push eligible surfaced cards via WhatsApp
                        (subset defined by whatsapp.PUSH_ARCHETYPES — see whatsapp.md §2)
         whatsapp_dry_run: if push_whatsapp=True, render but don't actually call Meta
+        apply_feedback: if True, populate snap.dismissed_archetypes / recently_shown
+                        from on-disk logs so the ranker's dismiss_decay + novelty
+                        terms fire. Set False for fixture-driven tests/demos.
     """
+    if apply_feedback:
+        apply_feedback_to_snapshot(snap)
+
     if include_weather and snap.today_temp_c is None:
         fc = get_forecast_safe(snap.city)
         if fc is not None:
