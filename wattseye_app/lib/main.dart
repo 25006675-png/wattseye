@@ -38,6 +38,7 @@ class CoachCardData {
     required this.rmMonthly,
     required this.why,
     required this.math,
+    this.dataSource = 'showcase',
   });
 
   final int id;
@@ -53,6 +54,7 @@ class CoachCardData {
   final double rmMonthly;
   final List<String> why;
   final List<String> math;
+  final String dataSource; // 'live' | 'replay' | 'showcase'
 }
 
 class CoachCardState {
@@ -355,9 +357,12 @@ class _HomeShellState extends State<HomeShell> {
   final _api = WattsEyeApi();
   int _selectedIndex = 0;
   bool _touPreview = false;
+  String _coachMode = 'showcase'; // 'showcase' (12-card replay) | 'live'
   late List<CoachCardState> _cards;
   DashboardSnapshot? _dashboard;
   IntegrationStatus? _integrations;
+  BillInfo? _bill;
+  List<HistoryDay> _history = const [];
   bool _backendOnline = false;
   String _connectionLabel = 'Demo data';
 
@@ -372,17 +377,23 @@ class _HomeShellState extends State<HomeShell> {
     try {
       final results = await Future.wait<Object>([
         _api.getDashboard(),
-        _api.getCoachCards(),
+        _api.getCoachCards(mode: _coachMode),
         _api.getIntegrationStatus(),
+        _api.getBill(),
+        _api.getHistory(),
       ]);
       final dashboard = results[0] as DashboardSnapshot;
       final coachCards = results[1] as List<Map<String, dynamic>>;
       final integrations = results[2] as IntegrationStatus;
+      final bill = results[3] as BillInfo;
+      final history = results[4] as List<HistoryDay>;
       if (!mounted) return;
       setState(() {
         _dashboard = dashboard;
         _cards = coachCards.map(_coachCardFromApi).toList();
         _integrations = integrations;
+        _bill = bill;
+        _history = history;
         _backendOnline = true;
         _connectionLabel = 'Live Pi';
       });
@@ -392,6 +403,38 @@ class _HomeShellState extends State<HomeShell> {
         _backendOnline = false;
         _connectionLabel = 'Demo data';
       });
+    }
+  }
+
+  Future<void> _setCoachMode(String mode) async {
+    if (mode == _coachMode) return;
+    setState(() => _coachMode = mode);
+    if (!_backendOnline) return;
+    try {
+      final cards = await _api.getCoachCards(mode: mode);
+      if (!mounted) return;
+      setState(() => _cards = cards.map(_coachCardFromApi).toList());
+    } catch (_) {
+      if (mounted) _snack(context, 'Could not load $mode cards');
+    }
+  }
+
+  Future<void> _turnOffAc() async {
+    if (!_backendOnline) {
+      _snack(context, 'Start the backend to send the AC cutoff');
+      return;
+    }
+    try {
+      final result = await _api.triggerAcCutoff();
+      if (!mounted) return;
+      _snack(
+        context,
+        result.sent
+            ? 'AC off command published to the Pi'
+            : 'Cutoff not sent: ${result.reason}',
+      );
+    } catch (_) {
+      if (mounted) _snack(context, 'Cutoff request failed');
     }
   }
 
@@ -464,19 +507,23 @@ class _HomeShellState extends State<HomeShell> {
         onRefresh: _refreshBackendData,
         onSendWhatsApp: _sendWhatsAppAlert,
         onOpenCoach: _openCoachCard,
+        onTurnOff: _turnOffAc,
       ),
       CoachPage(
         cards: _cards,
+        mode: _coachMode,
+        onModeChanged: _setCoachMode,
         onRefresh: _refreshBackendData,
         onCardTap: _openCoachCard,
         onAction: _markAction,
       ),
       BillPage(
         touPreview: _touPreview,
+        bill: _bill,
         onTogglePreview: () => setState(() => _touPreview = !_touPreview),
         onOpenCoach: _openCoachCard,
       ),
-      const HistoryPage(),
+      HistoryPage(history: _history),
       ProfilePage(integrations: _integrations, backendOnline: _backendOnline),
     ];
 
@@ -542,6 +589,7 @@ class DashboardPage extends StatelessWidget {
     required this.onRefresh,
     required this.onSendWhatsApp,
     required this.onOpenCoach,
+    required this.onTurnOff,
   });
 
   final DashboardSnapshot? dashboard;
@@ -550,6 +598,7 @@ class DashboardPage extends StatelessWidget {
   final Future<void> Function() onRefresh;
   final Future<void> Function(String keyName) onSendWhatsApp;
   final ValueChanged<String> onOpenCoach;
+  final Future<void> Function() onTurnOff;
 
   @override
   Widget build(BuildContext context) {
@@ -632,8 +681,7 @@ class DashboardPage extends StatelessWidget {
                   runSpacing: 8,
                   children: [
                     FilledButton.icon(
-                      onPressed: () =>
-                          _snack(context, 'AC turn-off command sent'),
+                      onPressed: onTurnOff,
                       icon: const Icon(Icons.power_settings_new, size: 18),
                       label: const Text('Turn off'),
                       style: FilledButton.styleFrom(
@@ -730,12 +778,16 @@ class CoachPage extends StatelessWidget {
   const CoachPage({
     super.key,
     required this.cards,
+    required this.mode,
+    required this.onModeChanged,
     required this.onRefresh,
     required this.onCardTap,
     required this.onAction,
   });
 
   final List<CoachCardState> cards;
+  final String mode;
+  final ValueChanged<String> onModeChanged;
   final Future<void> Function() onRefresh;
   final ValueChanged<String> onCardTap;
   final Future<void> Function(String keyName, InsightAction action) onAction;
@@ -756,6 +808,31 @@ class CoachPage extends StatelessWidget {
           PageHeader(
             subtitle:
                 '${cards.length} active insights - Potential RM $potential/month - Already saved RM 2.72',
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'showcase',
+                label: Text('Showcase'),
+                icon: Icon(Icons.grid_view, size: 16),
+              ),
+              ButtonSegment(
+                value: 'live',
+                label: Text('Live'),
+                icon: Icon(Icons.sensors, size: 16),
+              ),
+            ],
+            selected: {mode},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) => onModeChanged(selection.first),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            mode == 'live'
+                ? 'Live: cards from the Pi feed (or the bench log) - the real, sparser set.'
+                : 'Showcase: the full archetype set replayed from a recorded week.',
+            style: Theme.of(context).textTheme.labelSmall,
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -934,14 +1011,22 @@ class BillPage extends StatelessWidget {
     required this.touPreview,
     required this.onTogglePreview,
     required this.onOpenCoach,
+    this.bill,
   });
 
   final bool touPreview;
   final VoidCallback onTogglePreview;
   final ValueChanged<String> onOpenCoach;
+  final BillInfo? bill;
 
   @override
   Widget build(BuildContext context) {
+    final standardTotal = bill?.projectedTotalRm ?? 149.18;
+    final touTotal = bill?.touProjectedTotalRm ?? 143.80;
+    final kwh = (bill?.projectedKwh ?? 460).round();
+    final eff = bill?.effectiveSenPerKwh ?? 32.43;
+    final saving = standardTotal - touTotal;
+    final headlineTotal = touPreview ? touTotal : standardTotal;
     return RefreshIndicator(
       onRefresh: () async {},
       child: ListView(
@@ -963,15 +1048,13 @@ class BillPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  touPreview ? 'RM143.80' : 'RM149.18',
+                  'RM${headlineTotal.toStringAsFixed(2)}',
                   style: Theme.of(
                     context,
                   ).textTheme.titleLarge?.copyWith(fontSize: 36),
                 ),
                 Text(
-                  touPreview
-                      ? '460 kWh projected - 31.26 sen/kWh effective'
-                      : '460 kWh projected - 32.43 sen/kWh effective',
+                  '$kwh kWh projected - ${eff.toStringAsFixed(2)} sen/kWh effective',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -1002,7 +1085,7 @@ class BillPage extends StatelessWidget {
                 BillLine(
                   'Projected total',
                   'TNB RP4 standard schedule, your usage pattern',
-                  touPreview ? 'RM143.80' : 'RM149.18',
+                  'RM${headlineTotal.toStringAsFixed(2)}',
                   strong: true,
                 ),
               ],
@@ -1021,20 +1104,20 @@ class BillPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Row(
-                  children: const [
+                  children: [
                     Expanded(
                       child: PlanPanel(
                         label: 'Standard',
-                        amount: 'RM149.18',
-                        detail: '32.43 sen/kWh',
+                        amount: 'RM${standardTotal.toStringAsFixed(2)}',
+                        detail: '${eff.toStringAsFixed(2)} sen/kWh',
                       ),
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: PlanPanel(
                         label: 'Time-of-Use',
-                        amount: 'RM143.80',
-                        detail: '31.26 sen/kWh',
+                        amount: 'RM${touTotal.toStringAsFixed(2)}',
+                        detail: 'est. ToU plan',
                         recommended: true,
                       ),
                     ),
@@ -1044,12 +1127,14 @@ class BillPage extends StatelessWidget {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: const [
+                  children: [
                     ChipLabel(
-                      text: 'ToU cheaper by RM5.38/month',
-                      color: AppTheme.green,
+                      text: saving >= 0
+                          ? 'ToU cheaper by RM${saving.toStringAsFixed(2)}/month'
+                          : 'ToU costs RM${(-saving).toStringAsFixed(2)} more/month',
+                      color: saving >= 0 ? AppTheme.green : AppTheme.amber,
                     ),
-                    ChipLabel(
+                    const ChipLabel(
                       text: '35% peak / 65% off-peak',
                       color: AppTheme.muted,
                     ),
@@ -1175,7 +1260,9 @@ class BillPage extends StatelessWidget {
 }
 
 class HistoryPage extends StatelessWidget {
-  const HistoryPage({super.key});
+  const HistoryPage({super.key, this.history = const []});
+
+  final List<HistoryDay> history;
 
   @override
   Widget build(BuildContext context) {
@@ -1183,10 +1270,41 @@ class HistoryPage extends StatelessWidget {
       onRefresh: () async {},
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: const [
-          PageHeader(subtitle: 'Bill trend, appliance cost, and waste history'),
-          SizedBox(height: 12),
-          InfoCard(
+        children: [
+          const PageHeader(
+            subtitle: 'Bill trend, appliance cost, and waste history',
+          ),
+          const SizedBox(height: 12),
+          if (history.isNotEmpty) ...[
+            InfoCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Overline('RECENT DAYS (LIVE)'),
+                  const SizedBox(height: 8),
+                  for (final day in history)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            day.date,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          Text(
+                            'RM${day.costRm.toStringAsFixed(2)}',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          const InfoCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1760,6 +1878,10 @@ class RecommendationCard extends StatelessWidget {
                   Wrap(
                     spacing: 4,
                     children: [
+                      if (data.dataSource == 'live')
+                        ChipLabel(text: 'LIVE', color: AppTheme.green),
+                      if (data.dataSource == 'replay')
+                        ChipLabel(text: 'REPLAY', color: AppTheme.amber),
                       FamilyTag(family: data.family),
                       SeverityTag(severity: data.severity),
                     ],
@@ -2292,6 +2414,7 @@ CoachCardState _coachCardFromApi(Map<String, dynamic> json) {
       rmMonthly: monthly,
       why: _jsonStringList(json['why_lines']),
       math: _jsonStringList(json['math_lines']),
+      dataSource: json['data_source']?.toString() ?? 'showcase',
     ),
   );
 }

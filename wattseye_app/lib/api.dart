@@ -22,8 +22,8 @@ class WattsEyeApi {
     return DashboardSnapshot.fromJson(_decodeMap(response.body));
   }
 
-  Future<List<Map<String, dynamic>>> getCoachCards() async {
-    final response = await _get('/api/coach/cards');
+  Future<List<Map<String, dynamic>>> getCoachCards({String mode = 'showcase'}) async {
+    final response = await _get('/api/coach/cards?mode=$mode');
     final data = jsonDecode(response.body);
     if (data is! List) {
       throw const FormatException('Expected a list of coach cards');
@@ -46,6 +46,32 @@ class WattsEyeApi {
       body: jsonEncode({'action': action}),
     );
     _check(response);
+  }
+
+  Future<BillInfo> getBill() async {
+    final response = await _get('/api/bill');
+    return BillInfo.fromJson(_decodeMap(response.body));
+  }
+
+  Future<List<HistoryDay>> getHistory() async {
+    final response = await _get('/api/history');
+    final map = _decodeMap(response.body);
+    final days = map['days'];
+    if (days is! List) return const [];
+    return [
+      for (final d in days)
+        if (d is Map) HistoryDay.fromJson(Map<String, dynamic>.from(d)),
+    ];
+  }
+
+  Future<AcCutoffResult> triggerAcCutoff() async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/ac/cutoff'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'reason': 'app_manual'}),
+    );
+    _check(response);
+    return AcCutoffResult.fromJson(_decodeMap(response.body));
   }
 
   Future<WhatsAppSendResult> sendWhatsAppAlert(String archetypeKey) async {
@@ -79,6 +105,57 @@ class WattsEyeApi {
       throw const FormatException('Expected a JSON object');
     }
     return Map<String, dynamic>.from(data);
+  }
+}
+
+class BillInfo {
+  const BillInfo({
+    required this.projectedTotalRm,
+    required this.projectedKwh,
+    required this.effectiveSenPerKwh,
+    required this.touProjectedTotalRm,
+  });
+
+  final double projectedTotalRm;
+  final double projectedKwh;
+  final double effectiveSenPerKwh;
+  final double touProjectedTotalRm;
+
+  factory BillInfo.fromJson(Map<String, dynamic> json) {
+    return BillInfo(
+      projectedTotalRm: _number(json['projected_total_rm']),
+      projectedKwh: _number(json['projected_kwh']),
+      effectiveSenPerKwh: _number(json['effective_sen_per_kwh']),
+      touProjectedTotalRm: _number(json['tou_projected_total_rm']),
+    );
+  }
+}
+
+class HistoryDay {
+  const HistoryDay({required this.date, required this.costRm});
+
+  final String date;
+  final double costRm;
+
+  factory HistoryDay.fromJson(Map<String, dynamic> json) {
+    return HistoryDay(
+      date: json['date']?.toString() ?? '',
+      costRm: _number(json['cost_rm']),
+    );
+  }
+}
+
+class AcCutoffResult {
+  const AcCutoffResult({required this.sent, required this.reason});
+
+  final bool sent;
+  final String reason;
+
+  factory AcCutoffResult.fromJson(Map<String, dynamic> json) {
+    return AcCutoffResult(
+      sent: json['sent'] == true,
+      reason: json['reason']?.toString() ?? '',
+    );
   }
 }
 

@@ -73,18 +73,40 @@ def dashboard_payload() -> dict[str, Any]:
     }
 
 
-def coach_cards_payload() -> list[dict[str, Any]]:
-    cards = _coach_cards()
+def coach_cards_payload(mode: str = "showcase") -> list[dict[str, Any]]:
+    cards, source = _coach_cards(mode)
     payload = cards_to_json(cards)
     for card in payload:
+        card["data_source"] = source
         action = USER_ACTIONS.get(card["archetype_key"])
         if action is not None:
             card["user_action"] = action
     return payload
 
 
-def _coach_cards():
-    return generate_cards(_demo_snapshot(), surface_count=2, include_weather=True)
+def _select_coach_snapshot(mode: str):
+    """Return (snapshot, source_label).
+
+    showcase -> the hand-built demo literal that trips all 12 archetypes.
+    live     -> the Pi's live_state if fresh, else the bench-log history, else
+                (no data) the demo literal so the tab never renders empty.
+    """
+    if mode != "live":
+        return _demo_snapshot(), "showcase"
+    from backend.snapshot_builder import from_history, from_live_state
+
+    snap = from_live_state()
+    if snap is not None:
+        return snap, "live"
+    snap = from_history()
+    if snap is not None:
+        return snap, "replay"
+    return _demo_snapshot(), "showcase"
+
+
+def _coach_cards(mode: str = "showcase"):
+    snap, source = _select_coach_snapshot(mode)
+    return generate_cards(snap, surface_count=2, include_weather=True), source
 
 
 def integrations_status_payload() -> dict[str, Any]:
@@ -211,7 +233,7 @@ def send_whatsapp_payload(body: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(body.get("dry_run", False))
     use_llm = bool(body.get("use_llm", True))
 
-    cards = _coach_cards()
+    cards, _source = _coach_cards("showcase")
     card = next((item for item in cards if item.archetype_key == archetype_key), None)
     if card is None:
         return {
@@ -221,6 +243,34 @@ def send_whatsapp_payload(body: dict[str, Any]) -> dict[str, Any]:
         }
 
     return send_card_via_whatsapp(card, use_llm=use_llm, dry_run=dry_run)
+
+
+def ac_cutoff_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Publish the AC 'off' command to MQTT for pi_bridge -> ESP32 (IR + relay).
+
+    Degrades honestly: if paho-mqtt isn't installed (dev laptop) or the broker is
+    unreachable, returns sent=False with a reason instead of pretending. The
+    command shape matches pi_bridge's AC_COMMAND_TOPIC contract.
+    """
+    from datetime import datetime
+
+    command = {
+        "command": "off",
+        "reason": str(body.get("reason") or "app_manual"),
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
+    broker = os.environ.get("MQTT_BROKER", "127.0.0.1")
+    port = int(os.environ.get("MQTT_PORT", "1883"))
+    try:
+        import paho.mqtt.publish as publish
+    except ModuleNotFoundError:
+        return {"sent": False, "reason": "paho-mqtt not installed (Pi-only)", "command": command}
+    try:
+        publish.single("wattseye/ac/command", json.dumps(command),
+                       hostname=broker, port=port, qos=1)
+    except Exception as exc:  # broker down / network — be honest, don't fake success
+        return {"sent": False, "reason": f"MQTT publish failed: {exc}", "command": command}
+    return {"sent": True, "topic": "wattseye/ac/command", "command": command}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -236,7 +286,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/dashboard":
             self._send_json(dashboard_payload())
         elif path == "/api/coach/cards":
-            self._send_json(coach_cards_payload())
+            mode = query.get("mode", ["showcase"])[0]
+            self._send_json(coach_cards_payload(mode))
         elif path == "/api/integrations/status":
             self._send_json(integrations_status_payload())
         elif path == "/api/weather":
@@ -291,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ml/nilm/infer":
                 self._send_json(nilm_infer_payload(self._read_json()))
+                return
+            if path == "/api/ac/cutoff":
+                self._send_json(ac_cutoff_payload(self._read_json()))
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
