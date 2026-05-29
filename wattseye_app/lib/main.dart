@@ -831,7 +831,7 @@ class CoachPage extends StatelessWidget {
           Text(
             mode == 'live'
                 ? 'Live: cards from the Pi feed (or the bench log) - the real, sparser set.'
-                : 'Showcase: the full archetype set replayed from a recorded week.',
+                : 'Showcase: all 12 recommendation types (catalog) - not one real home.',
             style: Theme.of(context).textTheme.labelSmall,
           ),
           const SizedBox(height: 12),

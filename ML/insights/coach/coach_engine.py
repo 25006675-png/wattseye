@@ -131,6 +131,44 @@ def _demo_snapshot() -> HomeSnapshot:
     )
 
 
+def _peak_heavy_snapshot() -> HomeSnapshot:
+    """Companion to _demo_snapshot for the 12-card showcase catalog.
+
+    _demo_snapshot triggers 10 archetypes; it cannot also trigger #3
+    (simultaneous_peak_load) or #6 (peak_window_shift) — #6 is mutually exclusive
+    with #4 tou_switch (off-peak vs peak-heavy), and #3 needs two big simultaneous
+    loads. This snapshot is a peak-heavy, on-ToU home that fires exactly those two,
+    so the catalog assembly (api_server, showcase mode) can show all 12. Not a real
+    home state — a catalog filler.
+    """
+    now = datetime(2026, 5, 22, 19, 30)  # Friday, inside the ToU peak window
+    return HomeSnapshot(
+        timestamp=now,
+        city="Kuala Lumpur",
+        occupancy_state="home",
+        occupancy_since=datetime(2026, 5, 22, 18, 0),
+        live_power_w=3400.0,
+        standby_overnight_w=20.0,
+        active_appliances={
+            "ac": {"watts": 1500.0, "started_at": datetime(2026, 5, 22, 18, 0)},
+            "kettle": {"watts": 1900.0, "started_at": datetime(2026, 5, 22, 19, 28)},
+        },
+        recent_events=[
+            {"appliance": "dishwasher", "start": datetime(2026, 5, 22, 19, 30), "end": now,
+             "peak_w": 1800, "energy_kwh": 1.2, "phase": "evening"},
+            {"appliance": "washer", "start": datetime(2026, 5, 21, 20, 0), "end": datetime(2026, 5, 21, 21, 0),
+             "peak_w": 600, "energy_kwh": 0.6, "phase": "evening"},
+            {"appliance": "dishwasher", "start": datetime(2026, 5, 20, 18, 0), "end": datetime(2026, 5, 20, 19, 0),
+             "peak_w": 1800, "energy_kwh": 1.3, "phase": "evening"},
+        ],
+        on_tou_tariff=True,
+        peak_window_kwh_fraction=0.58,
+        projected_monthly_kwh=900.0,
+        last_month_kwh=880.0,
+        last_3mo_avg_kwh=870.0,
+    )
+
+
 if __name__ == "__main__":
     import json
     snap = _demo_snapshot()

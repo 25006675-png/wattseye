@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from ML.insights.coach.coach_engine import (  # noqa: E402
     _demo_snapshot,
+    _peak_heavy_snapshot,
     cards_to_json,
     generate_cards,
 )
@@ -105,8 +106,19 @@ def _select_coach_snapshot(mode: str):
 
 
 def _coach_cards(mode: str = "showcase"):
-    snap, source = _select_coach_snapshot(mode)
-    return generate_cards(snap, surface_count=2, include_weather=True), source
+    if mode == "live":
+        snap, source = _select_coach_snapshot("live")
+        return generate_cards(snap, surface_count=2, include_weather=True), source
+
+    # showcase: assemble the full 12-archetype catalog (one card each) by running
+    # the real engine on the demo snapshot (10) + the peak-heavy companion (#3, #6).
+    # This is an explicit catalog, not a single real home — see _peak_heavy_snapshot.
+    by_key: dict[str, Any] = {}
+    for snap in (_demo_snapshot(), _peak_heavy_snapshot()):
+        for card in generate_cards(snap, surface_count=2, include_weather=True, apply_feedback=False):
+            by_key.setdefault(card.archetype_key, card)
+    cards = sorted(by_key.values(), key=lambda c: c.archetype_id)
+    return cards, "showcase"
 
 
 def integrations_status_payload() -> dict[str, Any]:
