@@ -54,9 +54,12 @@ them. Hardware (clamp install, calibration) is explicitly out of scope here.
   normalisation** — only the UK-DALE training stats (x_mean≈300, x_std≈471) give
   sane output; 522/814 and window self-normalisation both give 0 W. So live **rig**
   accuracy needs **fine-tuning** (raw rig watts are off-distribution). Models key
-  on appliance **shape**, and the seq2point centre gives ~window/2 latency. Net:
-  live per-appliance NILM is **best-effort, not the demo hero** — keep the empty-
-  room cutoff as the live moment and replay for breadth.
+  on appliance **shape**. Readout uses recent-max (not the seq2point centre), so
+  measured first-detection latency is **~6-12 s** on a real kettle stream, with
+  some cross-talk to similar-wattage resistive loads (kettle/hair-dryer). Net:
+  live per-appliance NILM is workable for a distinctive load like the kettle, but
+  needs rig fine-tuning for reliability — keep the empty-room cutoff as the
+  guaranteed live moment.
 
 ## Still open
 

@@ -6,10 +6,13 @@ so the live pipeline can disaggregate the residual signal into appliances instea
 of lumping it into one "other" bucket.
 
 HONEST CAVEATS (read before trusting live numbers):
-  * VALIDATED end-to-end: streaming a real UK-DALE House-2 kettle window through
-    this runner (add_sample -> infer, 6 s bins, recent-max readout) detects
-    kettle at ~2143 W as the top hit, ~1-2 min latency. Port is byte-exact vs the
-    training repo (max diff 0.0).
+  * VALIDATED end-to-end: streaming a real UK-DALE House-2 kettle through this
+    runner (add_sample -> infer, 6 s bins, recent-max readout) detects kettle at
+    ~2143 W as the top hit. Measured first-detection latency: **~6-12 s (1-2
+    bins)** after onset. Port is byte-exact vs the training repo (max diff 0.0).
+  * Prediction can flicker around the on/off threshold for a bin or two right at
+    onset — add light hysteresis (on >threshold, off <0.7x) if you want a steady
+    tile on stage.
   * CROSS-TALK: similar-wattage resistive loads bleed across models (a kettle
     pulse also lit the hair_dryer model ~955 W). Show the strongest detection, or
     fine-tune on rig data to separate them. Kettle vs hair dryer (~2 kW each) is
@@ -113,9 +116,9 @@ class NilmRunner:
             for name, model in self.models.items():
                 seq = model(x)[0, 0]                  # [480] Discriminator output
                 # Read the MAX over the recent output positions, not the window
-                # centre: the centre corresponds to ~window/2 ago, which is useless
-                # live. Validated on real UK-DALE data — a kettle in the last ~80
-                # bins (≈8 min at 6 s) is caught at ~1-2 min latency this way.
+                # centre: the centre corresponds to ~window/2 ago, useless live.
+                # RECENT_POSITIONS is the lookback SPAN (how long a detection stays
+                # visible), NOT the latency — measured first-detection is ~6-12 s.
                 recent = seq[-RECENT_POSITIONS:]
                 val = float(recent.max())
                 watts = val * CUTOFF_W.get(name, 1000)
