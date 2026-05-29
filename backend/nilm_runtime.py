@@ -6,9 +6,14 @@ so the live pipeline can disaggregate the residual signal into appliances instea
 of lumping it into one "other" bucket.
 
 HONEST CAVEATS (read before trusting live numbers):
-  * VALIDATED: on a real UK-DALE House-2 kettle window with the correct stats
-    (x_mean~=300, x_std~=471) the faithful model predicts ~2130 W vs 2879 W
-    ground truth. The port is byte-exact vs the training repo (max diff 0.0).
+  * VALIDATED end-to-end: streaming a real UK-DALE House-2 kettle window through
+    this runner (add_sample -> infer, 6 s bins, recent-max readout) detects
+    kettle at ~2143 W as the top hit, ~1-2 min latency. Port is byte-exact vs the
+    training repo (max diff 0.0).
+  * CROSS-TALK: similar-wattage resistive loads bleed across models (a kettle
+    pulse also lit the hair_dryer model ~955 W). Show the strongest detection, or
+    fine-tune on rig data to separate them. Kettle vs hair dryer (~2 kW each) is
+    the known hard pair.
   * The model is BRITTLE to normalisation. Measured: wrong stats (522/814) -> 0 W;
     self-normalising the live window -> 0 W. It only works with the UK-DALE
     training-distribution stats baked in below. You cannot make it
@@ -39,6 +44,7 @@ MODEL_DIR = ROOT / "ML" / "NILM"
 CUTOFF_W = {"kettle": 3100, "fridge": 300, "washing_machine": 2500, "hair_dryer": 2500, "iron": 2500}
 ON_THRESHOLD_W = {"kettle": 2000, "fridge": 50, "washing_machine": 20, "hair_dryer": 800, "iron": 1000}
 WINDOW = 480
+RECENT_POSITIONS = 80   # read max over the last ~80 output bins (≈8 min @ 6 s) for low live latency
 # UK-DALE training-distribution aggregate stats (recovered by running the parser
 # on House 2). The model only produces sane output with these — see caveats above.
 # For a real deployment, recompute from the environment's own aggregate and/or
@@ -105,9 +111,14 @@ class NilmRunner:
         out: dict[str, dict] = {}
         with torch.no_grad():
             for name, model in self.models.items():
-                seq = model(x)                       # [1, 1, 480] Discriminator output
-                mid = float(seq[0, 0, seq.shape[-1] // 2])
-                watts = mid * CUTOFF_W.get(name, 1000)
+                seq = model(x)[0, 0]                  # [480] Discriminator output
+                # Read the MAX over the recent output positions, not the window
+                # centre: the centre corresponds to ~window/2 ago, which is useless
+                # live. Validated on real UK-DALE data — a kettle in the last ~80
+                # bins (≈8 min at 6 s) is caught at ~1-2 min latency this way.
+                recent = seq[-RECENT_POSITIONS:]
+                val = float(recent.max())
+                watts = val * CUTOFF_W.get(name, 1000)
                 watts = 0.0 if watts < 5 else min(watts, CUTOFF_W.get(name, watts))
                 out[name] = {
                     "watts": round(max(0.0, watts), 1),
