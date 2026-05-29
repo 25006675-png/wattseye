@@ -40,11 +40,28 @@ them. Hardware (clamp install, calibration) is explicitly out of scope here.
   - "Turn off" button: now calls `/api/ac/cutoff` and reports the real result.
   - `flutter analyze lib/` → no issues.
 
-## Still open (not done here)
+## Live NILM — wired (guarded), with honest limits
 
-- **Live NILM → per-appliance tiles + events.** Wire `electricity_model.py`
-  (faithful Discriminator) into `pi_bridge` so live disaggregation feeds
-  `active_appliances` + `recent_events` instead of one "other" bucket.
+- **`backend/nilm_runtime.py`** runs the faithful Discriminator
+  (`electricity_model.py`) over a rolling residual window → per-appliance watts +
+  on/off. Wired into `pi_bridge` behind `WATTSEYE_NILM=1` (off by default);
+  populates `active_appliances` with per-appliance tiles, else falls back to the
+  "other" bucket. Throttled to every ~6 s; degrades safely if torch/checkpoints
+  absent. Self-test still passes with it off.
+- **Proven:** the model port is byte-exact vs the training repo (max diff 0.0),
+  and on a real UK-DALE House-2 kettle window it predicts ~2130 W vs 2879 W gt.
+- **Hard limits found (documented in the module):** the model is **brittle to
+  normalisation** — only the UK-DALE training stats (x_mean≈300, x_std≈471) give
+  sane output; 522/814 and window self-normalisation both give 0 W. So live **rig**
+  accuracy needs **fine-tuning** (raw rig watts are off-distribution). Models key
+  on appliance **shape**, and the seq2point centre gives ~window/2 latency. Net:
+  live per-appliance NILM is **best-effort, not the demo hero** — keep the empty-
+  room cutoff as the live moment and replay for breadth.
+
+## Still open
+
+- **`recent_events` from live NILM** (event segmentation on the live stream) — the
+  tiles are wired; turning them into discrete coach events is the next step.
 - **Sensor calibration** — `power_math` constants are placeholders; live watts
   need the `build_now/08` calibration before they're trustworthy.
 - **Minor:** drop unused `flask` from `backend/requirements.txt`; optional

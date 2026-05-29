@@ -85,6 +85,10 @@ class BridgeState:
     wh_today: float = 0.0
     day: int = field(default_factory=lambda: datetime.now().day)
     _last_energy_ts: float = field(default_factory=time.time)
+    # Optional live NILM disaggregation (off unless WATTSEYE_NILM is set).
+    nilm: object | None = None
+    _last_nilm_ts: float = 0.0
+    _nilm_result: dict = field(default_factory=dict)
 
     @property
     def occupancy_state(self) -> str:
@@ -145,21 +149,27 @@ def build_dashboard_payload(state: BridgeState) -> dict:
     # a partial day, which explodes near midnight) and easy to read.
     projected_bill = round((state.main_watts / 1000.0) * 24 * 30 * RM_PER_KWH, 2)
 
+    def _entry(name: str, watts: float) -> dict:
+        share = watts / max(1.0, state.main_watts)
+        return {
+            "name": name,
+            "watts": round(watts, 1),
+            "today_kwh": round(kwh_today * share, 2),
+            "today_rm": round(today_cost * share, 2),
+        }
+
     appliances = []
     if state.ac_watts > 5:
-        appliances.append({
-            "name": "ac",
-            "watts": round(state.ac_watts, 1),
-            "today_kwh": round(kwh_today * (state.ac_watts / max(1.0, state.main_watts)), 2),
-            "today_rm": round(today_cost * (state.ac_watts / max(1.0, state.main_watts)), 2),
-        })
-    if state.residual_watts > 5:
-        appliances.append({
-            "name": "other",
-            "watts": round(state.residual_watts, 1),
-            "today_kwh": round(kwh_today * (state.residual_watts / max(1.0, state.main_watts)), 2),
-            "today_rm": round(today_cost * (state.residual_watts / max(1.0, state.main_watts)), 2),
-        })
+        appliances.append(_entry("ac", state.ac_watts))
+
+    # If live NILM is enabled and labelled the residual, show per-appliance tiles;
+    # otherwise fall back to the single aggregate "other" bucket.
+    nilm_on = {n: r for n, r in state._nilm_result.items() if r.get("on")}
+    if nilm_on:
+        for name, r in nilm_on.items():
+            appliances.append(_entry(name, r["watts"]))
+    elif state.residual_watts > 5:
+        appliances.append(_entry("other", state.residual_watts))
 
     return {
         "timestamp": now.isoformat(timespec="seconds"),
@@ -180,6 +190,8 @@ def apply_power_message(state: BridgeState, msg: dict) -> None:
     state.ac_watts = float(msg.get("ac_watts", 0.0))
     state.residual_watts = float(msg.get("residual_watts", 0.0))
     state.vrms = float(msg.get("vrms", 0.0))
+    if state.nilm is not None:
+        state.nilm.add_sample(state.residual_watts, time.time())
 
 
 def apply_occupancy_message(state: BridgeState, msg: dict) -> None:
@@ -199,6 +211,11 @@ def run_live(broker: str, port: int) -> None:
     import paho.mqtt.client as mqtt  # type: ignore
 
     state = BridgeState()
+    if os.environ.get("WATTSEYE_NILM", "").lower() in ("1", "true", "yes"):
+        from backend.nilm_runtime import try_build_runner
+        state.nilm = try_build_runner()
+        print("NILM live disaggregation:",
+              "ON" if state.nilm else "unavailable (torch/checkpoints missing) -> 'other' bucket")
 
     def on_connect(client, userdata, flags, rc):
         client.subscribe([(POWER_TOPIC, 0), (OCCUPANCY_TOPIC, 0), (AC_STATE_TOPIC, 0)])
@@ -225,6 +242,12 @@ def run_live(broker: str, port: int) -> None:
     try:
         while True:
             _accumulate_energy(state)
+            if state.nilm is not None and (time.time() - state._last_nilm_ts) >= 6.0:
+                try:
+                    state._nilm_result = state.nilm.infer()
+                except Exception:
+                    state._nilm_result = {}
+                state._last_nilm_ts = time.time()
             command = decide_ac_cutoff(state)
             if command is not None:
                 client.publish(AC_COMMAND_TOPIC, json.dumps(command), qos=1)
