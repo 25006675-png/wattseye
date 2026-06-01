@@ -41,6 +41,7 @@ from ML.insights.tnb_tariff import (  # noqa: E402
     RP4,
     calculate_standard_bill,
     calculate_tou_bill,
+    marginal_cost_rm,
 )
 from backend.live_state import read_live_state  # noqa: E402
 
@@ -49,6 +50,14 @@ from backend.live_state import read_live_state  # noqa: E402
 # rp4_tier_cliff coach card (instead of an unrelated 460 kWh fixture).
 DEMO_PROJECTED_KWH = 1480.0
 DEMO_PEAK_FRACTION = 0.35
+
+# Forecast cost attribution. In live mode the AC share is measured directly by
+# the dedicated clamp (exact); "other" is NILM-disaggregated; "unknown" is the
+# unattributed residual. These demo fractions illustrate that split for the
+# showcase forecast — the attribution bar is what no single-meter app can show.
+DEMO_AC_COST_FRACTION = 0.45
+DEMO_OTHER_COST_FRACTION = 0.38
+DEMO_BASELINE_KWH = 1360.0  # prior month, drives the trend arrow on the forecast
 
 # In-app action vocabulary -> learning-loop intent vocabulary.
 # "none" means the user un-acted a card; we drop it from the loop log because
@@ -107,11 +116,22 @@ def bill_payload() -> dict[str, Any]:
     off = round(kwh - peak, 1)
     tou = calculate_tou_bill(peak, off)
     threshold = RP4.high_band_threshold_kwh
+    total = std.total_rm
+    ac_rm = round(total * DEMO_AC_COST_FRACTION, 2)
+    other_rm = round(total * DEMO_OTHER_COST_FRACTION, 2)
+    unknown_rm = round(total - ac_rm - other_rm, 2)
+    baseline_total = calculate_standard_bill(DEMO_BASELINE_KWH).total_rm
     return {
-        "projected_total_rm": std.total_rm,
+        "projected_total_rm": total,
         "projected_kwh": std.monthly_kwh,
         "effective_sen_per_kwh": std.effective_sen_per_kwh,
         "tou_projected_total_rm": tou.total_rm,
+        "baseline_total_rm": round(baseline_total, 2),
+        "attribution": [
+            {"appliance": "Air-conditioning", "amount_rm": ac_rm, "kind": "measured"},
+            {"appliance": "Other appliances", "amount_rm": other_rm, "kind": "estimated"},
+            {"appliance": "Unknown / unlabelled", "amount_rm": unknown_rm, "kind": "unknown"},
+        ],
         "high_band_threshold_kwh": threshold,
         "headroom_kwh": round(threshold - kwh, 1),
         "in_high_band": kwh > threshold,
@@ -126,6 +146,73 @@ def bill_payload() -> dict[str, Any]:
             for line in std.lines
         ],
         "notes": std.notes,
+    }
+
+
+# Forecast simulator levers. Consumption levers remove kWh (so the bill is
+# recomputed once through the tariff engine — this is what makes cliff / EEI
+# band crossings correct, which a flat per-card sum cannot capture). The two
+# tariff levers change the plan instead and never stack (opposite premises).
+FORECAST_CONSUMPTION_LEVERS = {
+    "left_on_empty",
+    "phantom_standby",
+    "simultaneous_peak_load",
+    "rp4_tier_cliff",
+    "anomaly_with_action",
+    "routine_shift",
+    "inefficient_upgrade",
+}
+FORECAST_TARIFF_LEVERS = {"tou_switch", "peak_window_shift"}
+
+
+def forecast_simulate_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the projected bill for a chosen set of forecast levers.
+
+    Composition is done through the tariff engine, not by summing per-card RM:
+    consumption levers are converted to kWh removed and the bill is recomputed
+    once at the new usage, so a combination that drops the home back under the
+    1,500 kWh cliff sees the full rate reduction on every unit.
+    """
+    mode = body.get("mode", "showcase")
+    selected = {str(k) for k in body.get("selected", [])}
+    cards, _ = _coach_cards(mode)
+    impact_by_key = {c.archetype_key: c.impact_rm_monthly for c in cards}
+
+    proj = DEMO_PROJECTED_KWH
+    baseline_total = calculate_standard_bill(proj).total_rm
+    # RM per kWh at the current margin (reflects whichever band proj sits in).
+    marginal_rate = marginal_cost_rm(1.0, proj - 1.0)
+    if marginal_rate <= 0:
+        marginal_rate = RP4.standard.generation_low_band_sen / 100.0
+
+    # 1) Consumption levers -> kWh removed -> single bill recompute.
+    kwh_saved = 0.0
+    for key in selected & FORECAST_CONSUMPTION_LEVERS:
+        kwh_saved += impact_by_key.get(key, 0.0) / marginal_rate
+    new_kwh = max(proj - kwh_saved, 0.0)
+    bill_after = calculate_standard_bill(new_kwh).total_rm
+    consumption_saving = baseline_total - bill_after
+
+    # 2) Tariff levers stack on top, but only the larger of the mutually
+    #    exclusive pair counts.
+    tariff_candidates: list[float] = []
+    if "tou_switch" in selected:
+        peak = new_kwh * DEMO_PEAK_FRACTION
+        off = new_kwh - peak
+        tou_total = calculate_tou_bill(peak, off).total_rm
+        tariff_candidates.append(max(bill_after - tou_total, 0.0))
+    if "peak_window_shift" in selected:
+        tariff_candidates.append(impact_by_key.get("peak_window_shift", 0.0))
+    tariff_saving = max(tariff_candidates) if tariff_candidates else 0.0
+
+    total_saving = round(consumption_saving + tariff_saving, 2)
+    composed_total = round(baseline_total - total_saving, 2)
+    return {
+        "projected_total_rm": round(baseline_total, 2),
+        "composed_total_rm": composed_total,
+        "saving_rm": total_saving,
+        "new_kwh": round(new_kwh, 1),
+        "selected": sorted(selected),
     }
 
 
@@ -315,6 +402,25 @@ def send_whatsapp_payload(body: dict[str, Any]) -> dict[str, Any]:
     return send_card_via_whatsapp(card, use_llm=use_llm, dry_run=dry_run)
 
 
+def reminders_create_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Schedule a WhatsApp reminder for a coach card, N seconds from now.
+
+    The scheduler thread (started in main) fires it via the same Meta WhatsApp
+    path as the manual nudge — so it no-ops cleanly until the token is set.
+    """
+    from datetime import datetime, timedelta
+
+    from backend import reminders
+
+    key = str(body.get("archetype_key") or "")
+    if not key:
+        return {"ok": False, "reason": "archetype_key required"}
+    delay = float(body.get("fire_in_seconds", 0) or 0)
+    fire_at = datetime.now().astimezone() + timedelta(seconds=delay)
+    item = reminders.schedule(key, fire_at, str(body.get("headline") or ""))
+    return {"ok": True, "reminder": item}
+
+
 def ac_cutoff_payload(body: dict[str, Any]) -> dict[str, Any]:
     """Publish the AC 'off' command to MQTT for pi_bridge -> ESP32 (IR + relay).
 
@@ -446,6 +552,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/appliance/label":
                 self._send_json(appliance_label_payload(self._read_json()))
                 return
+            if path == "/api/forecast/simulate":
+                self._send_json(forecast_simulate_payload(self._read_json()))
+                return
+            if path == "/api/reminders":
+                self._send_json(reminders_create_payload(self._read_json()))
+                return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
 
@@ -520,6 +632,10 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
+
+    from backend import reminders
+
+    reminders.start(lambda key: send_whatsapp_payload({"archetype_key": key}))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"WattsEye API listening on http://{args.host}:{args.port}")

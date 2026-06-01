@@ -166,7 +166,7 @@ def detect_tou_switch(snap: HomeSnapshot) -> list[Situation]:
         return []
     evidence = [
         Evidence("Routine engine", f"{offpeak_frac*100:.0f}% of your last 30 days of usage fell in off-peak hours."),
-        Evidence("TNB tariff calc", "ToU off-peak rate is 17.55 sen/kWh lower than peak — savings depend on actual usage split."),
+        Evidence("TNB tariff calc", "ToU off-peak generation rate is 4.09 sen/kWh lower than peak — savings depend on actual usage split."),
     ]
     return [Situation(
         archetype_id=4, archetype_key="tou_switch", family="tariff",
@@ -195,8 +195,9 @@ def detect_rp4_tier_cliff(snap: HomeSnapshot) -> list[Situation]:
 
 def detect_peak_window_shift(snap: HomeSnapshot) -> list[Situation]:
     """#6 Schedulable appliances regularly run in peak window."""
-    if not snap.on_tou_tariff and snap.peak_window_kwh_fraction < 0.5:
-        return []  # only nudge people whose pattern actually leans peak-heavy
+    if not snap.on_tou_tariff:
+        return []  # shifting load in time only saves money under ToU pricing;
+        # standard RP4 has no time-of-use rate, so #4 tou_switch owns standard homes
     schedulable = {"dishwasher", "washer", "washing_machine", "dryer", "water_heater"}
     candidates = []
     for ev in snap.recent_events:

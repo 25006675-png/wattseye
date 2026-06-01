@@ -16,6 +16,7 @@ if str(_INSIGHTS) not in sys.path:
     sys.path.insert(0, str(_INSIGHTS))
 
 from tnb_tariff import (  # type: ignore
+    RP4,
     calculate_standard_bill,
     calculate_tou_bill,
     marginal_cost_rm,
@@ -108,10 +109,12 @@ def _q_rp4_tier_cliff(s: Situation, snap: HomeSnapshot) -> None:
 def _q_peak_window_shift(s: Situation, snap: HomeSnapshot) -> None:
     peak_kwh = s.raw_metrics["peak_kwh"]
     monthly_shiftable_kwh = peak_kwh * (WEEKS_PER_MONTH / 2)  # last 14 days -> month
-    if snap.on_tou_tariff:
-        s.impact_rm_monthly = round(monthly_shiftable_kwh * 0.1755, 2)
-    else:
-        s.impact_rm_monthly = round(monthly_shiftable_kwh * 0.05, 2)
+    # Shifting a kWh out of the ToU peak window saves the peak-vs-off-peak
+    # generation gap (capacity + network are identical in both windows).
+    # Derived from the RP4 schedule, not a hardcoded constant — only ToU homes
+    # see a saving; standard RP4 has no time-of-use rate (see detect_peak_window_shift).
+    gap_sen = RP4.tou_peak.generation_low_band_sen - RP4.tou_offpeak.generation_low_band_sen
+    s.impact_rm_monthly = round(monthly_shiftable_kwh * gap_sen / 100.0, 2)
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 

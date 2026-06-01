@@ -28,6 +28,17 @@ class WattsEyeApp extends StatelessWidget {
 
 enum InsightAction { none, done, remind, dismissed }
 
+// Carbon avoided ≈ kWh saved × Malaysian grid emission factor. kWh is derived
+// from the RM saving at the RP4 energy rate (gen+cap+net, low band ≈
+// RM0.4443/kWh), so it's an approximation tied to the saving the coach already
+// computed — not a separate data source.
+const _gridKgPerKwh = 0.55;
+const _rmPerKwhApprox = 0.4443;
+String _carbonLabel(double rmMonthly) {
+  final kg = (rmMonthly / _rmPerKwhApprox) * _gridKgPerKwh;
+  return '${kg.toStringAsFixed(1)} kg';
+}
+
 class CoachCardData {
   const CoachCardData({
     required this.id,
@@ -500,6 +511,26 @@ class _HomeShellState extends State<HomeShell> {
             if (!mounted) return;
             Navigator.of(context).pop();
           },
+          onTurnOff: _turnOffAc,
+          onOpenForecast: () {
+            Navigator.of(context).pop();
+            setState(() => _selectedIndex = 2);
+          },
+          onRemind: (seconds) async {
+            try {
+              await _api.createReminder(
+                keyName,
+                seconds,
+                headline: card.data.headline,
+              );
+              if (!mounted) return;
+              _snack(context, 'WhatsApp reminder set');
+            } catch (_) {
+              if (!mounted) return;
+              _snack(context, 'Start the backend to set reminders');
+            }
+            if (mounted) Navigator.of(context).pop();
+          },
         ),
       ),
     );
@@ -507,7 +538,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Dashboard', 'Coach', 'Bill', 'History', 'Profile'];
+    const titles = ['Dashboard', 'Coach', 'Forecast', 'History', 'Profile'];
     final pages = [
       DashboardPage(
         dashboard: _dashboard,
@@ -528,8 +559,10 @@ class _HomeShellState extends State<HomeShell> {
       BillPage(
         touPreview: _touPreview,
         bill: _bill,
+        cards: _cards,
         onTogglePreview: () => setState(() => _touPreview = !_touPreview),
         onOpenCoach: _openCoachCard,
+        onSimulate: (keys) => _api.simulateForecast(keys, mode: _coachMode),
       ),
       HistoryPage(history: _history),
       ProfilePage(integrations: _integrations, backendOnline: _backendOnline),
@@ -565,9 +598,9 @@ class _HomeShellState extends State<HomeShell> {
             label: 'Coach',
           ),
           NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long),
-            label: 'Bill',
+            icon: Icon(Icons.insights_outlined),
+            selectedIcon: Icon(Icons.insights),
+            label: 'Forecast',
           ),
           NavigationDestination(
             icon: Icon(Icons.bar_chart_outlined),
@@ -1367,10 +1400,102 @@ class CardDetailScreen extends StatelessWidget {
     super.key,
     required this.card,
     required this.onAction,
+    this.onTurnOff,
+    this.onOpenForecast,
+    this.onRemind,
   });
 
   final CoachCardState card;
   final Future<void> Function(InsightAction action) onAction;
+  // Action-layer hooks: a control we can run for the user, and an in-app jump.
+  final VoidCallback? onTurnOff;
+  final VoidCallback? onOpenForecast;
+  // Schedule a WhatsApp reminder this many seconds from now.
+  final Future<void> Function(int fireInSeconds)? onRemind;
+
+  Future<void> _pickReminder(BuildContext context) async {
+    if (onRemind == null) {
+      await onAction(InsightAction.remind);
+      return;
+    }
+    final now = DateTime.now();
+    DateTime at(int dayOffset, int hour) =>
+        DateTime(now.year, now.month, now.day + dayOffset, hour);
+    final tonight = at(0, 20).isAfter(now) ? at(0, 20) : at(1, 20);
+    final options = <(String, int)>[
+      ('In 30 seconds (demo)', 30),
+      ('In 1 hour', 3600),
+      ('Tonight, 8 PM', tonight.difference(now).inSeconds),
+      ('Tomorrow, 8 AM', at(1, 8).difference(now).inSeconds),
+    ];
+    final seconds = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Remind me on WhatsApp',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            for (final (label, secs) in options)
+              ListTile(
+                leading: const Icon(Icons.schedule),
+                title: Text(label),
+                onTap: () => Navigator.pop(ctx, secs),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (seconds != null) await onRemind!(seconds);
+  }
+
+  /// The real, archetype-specific next step. Turns a recommendation into an
+  /// action: run a control, apply at the source, buy, or jump to the evidence.
+  Widget? _primaryAction(BuildContext context) {
+    switch (card.data.keyName) {
+      case 'left_on_empty':
+        if (onTurnOff == null) return null;
+        return FilledButton.icon(
+          onPressed: onTurnOff,
+          icon: const Icon(Icons.power_settings_new),
+          label: const Text('Turn off now'),
+        );
+      case 'tou_switch':
+        return FilledButton.icon(
+          onPressed: () => launchUrl(
+            Uri.parse(
+              'https://www.mytnb.com.my/announcements/entry/ToU-in-myTNB-app',
+            ),
+            mode: LaunchMode.externalApplication,
+          ),
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('Apply on myTNB'),
+        );
+      case 'inefficient_upgrade':
+        return FilledButton.icon(
+          onPressed: () => launchUrl(
+            Uri.parse('https://www.st.gov.my/en/energy-efficient-appliances'),
+            mode: LaunchMode.externalApplication,
+          ),
+          icon: const Icon(Icons.shopping_bag_outlined),
+          label: const Text('Find a 5-star model (ST registry)'),
+        );
+      case 'bill_trending_high':
+        if (onOpenForecast == null) return null;
+        return FilledButton.icon(
+          onPressed: onOpenForecast,
+          icon: const Icon(Icons.insights_outlined),
+          label: const Text("See what's driving it"),
+        );
+      default:
+        return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1385,7 +1510,6 @@ class CardDetailScreen extends StatelessWidget {
             runSpacing: 8,
             children: [
               FamilyTag(family: data.family),
-              SeverityTag(severity: data.severity),
             ],
           ),
           const SizedBox(height: 12),
@@ -1422,16 +1546,25 @@ class CardDetailScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () => onAction(InsightAction.done),
-            icon: const Icon(Icons.check_circle_outline),
-            label: const Text('Do this'),
-          ),
+          if (_primaryAction(context) case final action?) ...[
+            action,
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => onAction(InsightAction.done),
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Mark as done'),
+            ),
+          ] else
+            FilledButton.icon(
+              onPressed: () => onAction(InsightAction.done),
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Mark as done'),
+            ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: () => onAction(InsightAction.remind),
+            onPressed: () => _pickReminder(context),
             icon: const Icon(Icons.notifications_active_outlined),
-            label: const Text('Remind me'),
+            label: const Text('Remind me on WhatsApp'),
           ),
           const SizedBox(height: 4),
           TextButton(
@@ -1533,6 +1666,12 @@ class CliffGauge extends StatelessWidget {
     final maxScale = thresholdKwh * 1.12;
     final fillFrac = (projectedKwh / maxScale).clamp(0.0, 1.0);
     final cliffFrac = (thresholdKwh / maxScale).clamp(0.0, 1.0);
+    // RP4 secondary thresholds, shown as muted reference ticks (not cliffs):
+    // 600 kWh = retail charge + AFA un-waived; 1,000 kWh = EEI rebate ends.
+    const waiverKwh = 600.0;
+    const eeiEndKwh = 1000.0;
+    final waiverFrac = (waiverKwh / maxScale).clamp(0.0, 1.0);
+    final eeiFrac = (eeiEndKwh / maxScale).clamp(0.0, 1.0);
     final near =
         (thresholdKwh - projectedKwh) <= 50 && projectedKwh <= thresholdKwh;
     final over = projectedKwh > thresholdKwh;
@@ -1583,6 +1722,49 @@ class CliffGauge extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: fillColor,
                         borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                  ),
+                  // Secondary RP4 thresholds — muted ticks for context.
+                  Positioned(
+                    top: 14,
+                    left: (w * waiverFrac) - 1,
+                    child: Container(
+                      width: 2,
+                      height: 20,
+                      color: AppTheme.muted,
+                    ),
+                  ),
+                  Positioned(
+                    top: 2,
+                    left: (w * waiverFrac - 10).clamp(0.0, w - 24),
+                    child: const Text(
+                      '600',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.muted,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 14,
+                    left: (w * eeiFrac) - 1,
+                    child: Container(
+                      width: 2,
+                      height: 20,
+                      color: AppTheme.muted,
+                    ),
+                  ),
+                  Positioned(
+                    top: 2,
+                    left: (w * eeiFrac - 14).clamp(0.0, w - 28),
+                    child: const Text(
+                      '1,000',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.muted,
                       ),
                     ),
                   ),
@@ -1639,389 +1821,70 @@ class CliffGauge extends StatelessWidget {
   }
 }
 
-/// Printed-statement header that mimics a real TNB "Bil Elektrik Anda":
-/// red logo lockup, account meta, and the iconic yellow amount-due callout —
-/// rendered as a clean mobile card rather than a literal paper photocopy.
-class TnbStatementHeader extends StatelessWidget {
-  const TnbStatementHeader({
-    super.key,
-    required this.modeLabel,
-    required this.amount,
-    required this.kwh,
-    required this.effSen,
-    required this.accountNo,
-    required this.billDate,
-    required this.dueDate,
-  });
+// (Removed TnbStatementHeader / _MetaCell / BillReferenceFooter — the fake TNB
+// printed-statement cosplay. The Forecast page no longer impersonates a bill.)
 
-  final String modeLabel;
-  final double amount;
-  final int kwh;
-  final double effSen;
-  final String accountNo;
-  final String billDate;
-  final String dueDate;
+// Forecast cost attribution fallback (offline) — mirrors bill_payload's split.
+const _fallbackAttribution = [
+  ApplianceCost(
+    appliance: 'Air-conditioning',
+    amountRm: 300.40,
+    kind: 'measured',
+  ),
+  ApplianceCost(
+    appliance: 'Other appliances',
+    amountRm: 253.67,
+    kind: 'estimated',
+  ),
+  ApplianceCost(
+    appliance: 'Unknown / unlabelled',
+    amountRm: 113.49,
+    kind: 'unknown',
+  ),
+];
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.radius),
-        border: Border.all(color: AppTheme.statementBorder),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-            color: Colors.black.withValues(alpha: 0.06),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Masthead: TNB blue band with logo lockup, title + tariff tag.
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(
-              AppTheme.sp4,
-              AppTheme.sp4,
-              AppTheme.sp4,
-              AppTheme.sp4,
-            ),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppTheme.tnbBlueLight, AppTheme.tnbBlueDark],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.bolt,
-                    color: AppTheme.tnbRed,
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            'TNB',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 16,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Tenaga Nasional',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontWeight: FontWeight.w600,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 1),
-                      const Text(
-                        'Electricity Bill',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.20),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    modeLabel,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Account meta strip.
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppTheme.sp4,
-              vertical: AppTheme.sp3,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _MetaCell(label: 'Account No.', value: accountNo),
-                ),
-                Expanded(
-                  child: _MetaCell(label: 'Bill Date', value: billDate),
-                ),
-              ],
-            ),
-          ),
-          // Amount-due callout — the iconic yellow TNB box.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppTheme.sp4,
-              0,
-              AppTheme.sp4,
-              AppTheme.sp4,
-            ),
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: AppTheme.billYellowBg,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.billYellowBorder),
-              ),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: 5,
-                      decoration: const BoxDecoration(
-                        color: AppTheme.billYellowBar,
-                        borderRadius: BorderRadius.horizontal(
-                          left: Radius.circular(10),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.all(AppTheme.sp3),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'TOTAL AMOUNT DUE',
-                              style: TextStyle(
-                                color: AppTheme.tnbInk,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 11,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                            Text(
-                              'Jumlah Perlu Dibayar',
-                              style: TextStyle(
-                                color: AppTheme.tnbInk.withValues(alpha: 0.55),
-                                fontWeight: FontWeight.w600,
-                                fontSize: 10.5,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'RM ${amount.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                color: AppTheme.tnbInk,
-                                fontSize: 32,
-                                fontWeight: FontWeight.w700,
-                                height: 1.0,
-                                letterSpacing: -0.8,
-                                fontFeatures: [FontFeature.tabularFigures()],
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.event_outlined,
-                                  size: 14,
-                                  color: AppTheme.tnbInk,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  'Pay before $dueDate',
-                                  style: const TextStyle(
-                                    color: AppTheme.tnbInk,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'Projected $kwh kWh - ${effSen.toStringAsFixed(2)} sen/kWh effective',
-                              style: TextStyle(
-                                color: AppTheme.tnbInk.withValues(alpha: 0.7),
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+// Coach archetypes that become a togglable forecast lever (actionable +
+// quantified). Diagnostic cards (bill_trending_high, comparative_regression,
+// routine_shift, weather_correlated_ac) and capex (inefficient_upgrade) stay
+// context, not levers.
+const _leverKeys = {
+  'left_on_empty',
+  'phantom_standby',
+  'simultaneous_peak_load',
+  'tou_switch',
+  'rp4_tier_cliff',
+  'peak_window_shift',
+  'anomaly_with_action',
+  'routine_shift',
+  'inefficient_upgrade',
+};
+
+// The two tariff strategies rest on contradictory premises (#4 assumes the home
+// is not on ToU; #6 assumes it is), so at most one of them feeds the composed
+// total — they never stack.
+const _tariffGroupKeys = {'tou_switch', 'peak_window_shift'};
+
+List<CoachCardData> _forecastLevers(List<CoachCardState> cards) {
+  return [
+    for (final c in cards)
+      if (_leverKeys.contains(c.data.keyName) && c.data.rmMonthly > 0) c.data,
+  ];
 }
 
-class _MetaCell extends StatelessWidget {
-  const _MetaCell({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label.toUpperCase(),
-          style: const TextStyle(
-            color: AppTheme.muted,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: const TextStyle(
-            color: AppTheme.tnbInk,
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
+/// Composed monthly saving for the selected lever set, honouring the tariff
+/// guard: at most one of {tou_switch, peak_window_shift} feeds the total.
+double _composedSaving(List<CoachCardData> levers, Set<String> selected) {
+  double sum = 0;
+  double tariffBest = 0;
+  for (final l in levers) {
+    if (!selected.contains(l.keyName)) continue;
+    if (_tariffGroupKeys.contains(l.keyName)) {
+      tariffBest = max(tariffBest, l.rmMonthly);
+    } else {
+      sum += l.rmMonthly;
+    }
   }
-}
-
-/// Statement reference footer with a faux barcode — the bill-stub strip that
-/// makes the page read as an authentic TNB document.
-class BillReferenceFooter extends StatelessWidget {
-  const BillReferenceFooter({super.key, required this.accountNo});
-
-  final String accountNo;
-
-  @override
-  Widget build(BuildContext context) {
-    // Deterministic bar widths so the "barcode" looks like a real one.
-    const widths = [
-      2.0,
-      1.0,
-      3.0,
-      1.0,
-      2.0,
-      1.0,
-      1.0,
-      3.0,
-      2.0,
-      1.0,
-      2.0,
-      1.0,
-      3.0,
-      1.0,
-      1.0,
-      2.0,
-      2.0,
-      1.0,
-      3.0,
-      2.0,
-      1.0,
-      1.0,
-      2.0,
-      3.0,
-      1.0,
-      2.0,
-      1.0,
-      1.0,
-      3.0,
-      2.0,
-      1.0,
-      2.0,
-      1.0,
-      3.0,
-      1.0,
-      2.0,
-    ];
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppTheme.sp4),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.radius),
-        border: Border.all(color: AppTheme.statementBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Account No. $accountNo',
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: AppTheme.tnbInk,
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 38,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < widths.length; i++) ...[
-                  Container(
-                    width: widths[i],
-                    color: i.isEven ? AppTheme.tnbInk : Colors.transparent,
-                  ),
-                  const SizedBox(width: 1),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Scan to pay via myTNB / JomPAY - bill generated by WattsEye',
-            style: Theme.of(context).textTheme.labelSmall,
-          ),
-        ],
-      ),
-    );
-  }
+  return sum + tariffBest;
 }
 
 class BillPage extends StatelessWidget {
@@ -2031,12 +1894,16 @@ class BillPage extends StatelessWidget {
     required this.onTogglePreview,
     required this.onOpenCoach,
     this.bill,
+    this.cards = const [],
+    this.onSimulate,
   });
 
   final bool touPreview;
   final VoidCallback onTogglePreview;
   final ValueChanged<String> onOpenCoach;
   final BillInfo? bill;
+  final List<CoachCardState> cards;
+  final Future<ForecastSim> Function(List<String> keys)? onSimulate;
 
   @override
   Widget build(BuildContext context) {
@@ -2044,147 +1911,60 @@ class BillPage extends StatelessWidget {
     final touTotal = bill?.touProjectedTotalRm ?? 650.27;
     final kwh = (bill?.projectedKwh ?? 1480).round();
     final eff = bill?.effectiveSenPerKwh ?? 45.11;
+    final baseline = (bill?.baselineTotalRm ?? 0) > 0
+        ? bill!.baselineTotalRm
+        : 614.25;
     final saving = standardTotal - touTotal;
-    final headlineTotal = touPreview ? touTotal : standardTotal;
     final lines = (bill?.lines.isNotEmpty ?? false)
         ? bill!.lines
         : _fallbackBillLines;
+    final attribution = (bill?.attribution.isNotEmpty ?? false)
+        ? bill!.attribution
+        : _fallbackAttribution;
     final threshold = bill?.highBandThresholdKwh ?? 1500;
     final headroom = bill?.headroomKwh ?? (threshold - kwh);
     final lowGen = bill?.lowBandGenSen ?? 27.03;
     final highGen = bill?.highBandGenSen ?? 37.03;
     final inHighBand = bill?.inHighBand ?? false;
+    final levers = _forecastLevers(cards);
+    final isShowcase =
+        cards.isEmpty || cards.first.data.dataSource == 'showcase';
+
     return RefreshIndicator(
       onRefresh: () async {},
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           const PageHeader(
-            subtitle: "Your TNB RP4 bill, projected from this month's usage",
+            subtitle:
+                "A forecast you can change — where this month's bill is heading, and what's driving it.",
           ),
           const SizedBox(height: AppTheme.sp3),
-          // --- TNB printed-statement header (Bil Elektrik Anda) ---
-          TnbStatementHeader(
-            modeLabel: touPreview ? 'Time-of-Use (preview)' : 'RP4 - Standard',
-            amount: headlineTotal,
+          ForecastHero(
+            projectedTotal: standardTotal,
+            baselineTotal: baseline,
             kwh: kwh,
             effSen: eff,
-            accountNo: '0123 4567 4291',
-            billDate: '31 May 2026',
-            dueDate: '14 Jun 2026',
+            attribution: attribution,
           ),
           const SizedBox(height: AppTheme.sp4),
-          const SectionLabel('Bill breakdown'),
+          const SectionLabel('What if you act?'),
           const SizedBox(height: AppTheme.sp2),
-          InfoCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final line in lines)
-                  BillLine(
-                    line.label,
-                    line.unitDetail,
-                    line.amountRm < 0
-                        ? '- ${formatRm(-line.amountRm)}'
-                        : formatRm(line.amountRm),
-                    positive: line.amountRm < 0,
-                  ),
-                const Divider(),
-                BillLine(
-                  'Projected total',
-                  'TNB RP4 standard schedule - your usage pattern',
-                  formatRm(standardTotal),
-                  strong: true,
-                ),
-                if (touPreview) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    'Breakdown shown for the Standard tariff. Time-of-Use total compared below.',
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
-              ],
+          if (levers.isEmpty)
+            InfoCard(
+              child: Text(
+                'No actionable levers for this home right now — the forecast is already lean. Suggestions appear here as the Coach detects them.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            )
+          else
+            WhatIfSimulator(
+              projectedTotal: standardTotal,
+              levers: levers,
+              isShowcase: isShowcase,
+              onOpenCoach: onOpenCoach,
+              onSimulate: onSimulate,
             ),
-          ),
-          const SizedBox(height: 16),
-          const SectionLabel('Standard vs Time-of-Use'),
-          const SizedBox(height: 8),
-          InfoCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Based on your last 30 days. ToU peak hours are weekdays 2-10 PM; off-peak all other hours.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: PlanPanel(
-                        label: 'Standard',
-                        amount: formatRm(standardTotal),
-                        detail: '${eff.toStringAsFixed(2)} sen/kWh',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: PlanPanel(
-                        label: 'Time-of-Use',
-                        amount: formatRm(touTotal),
-                        detail: 'est. ToU plan',
-                        recommended: true,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    ChipLabel(
-                      text: saving >= 0
-                          ? 'ToU cheaper by ${formatRm(saving)}/month'
-                          : 'ToU costs ${formatRm(-saving)} more/month',
-                      color: saving >= 0 ? AppTheme.green : AppTheme.amber,
-                    ),
-                    const ChipLabel(
-                      text: '35% peak / 65% off-peak',
-                      color: AppTheme.muted,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Shifting half your AC runtime to before 2 PM or after 10 PM could increase the saving to about RM12/month.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: onTogglePreview,
-                      icon: Icon(
-                        touPreview
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                      ),
-                      label: Text(
-                        touPreview ? 'Show standard' : 'Preview as ToU',
-                      ),
-                    ),
-                    FilledButton(
-                      onPressed: () => onOpenCoach('tou_switch'),
-                      child: const Text('See Coach to apply'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
           const SizedBox(height: 16),
           const SectionLabel('1,500 kWh high-band cliff'),
           const SizedBox(height: 8),
@@ -2196,7 +1976,7 @@ class BillPage extends StatelessWidget {
                 Text(
                   inHighBand
                       ? 'You are over the 1,500 kWh cliff - every unit this month is billed at the ${highGen.toStringAsFixed(2)} sen/kWh high-band generation rate.'
-                      : 'Projected $kwh kWh - ${headroom.toStringAsFixed(0)} kWh under the 1,500 kWh cliff. Cross it and the generation rate jumps from ${lowGen.toStringAsFixed(2)} to ${highGen.toStringAsFixed(2)} sen/kWh on every unit.',
+                      : 'Projected $kwh kWh - ${headroom.toStringAsFixed(0)} kWh under the 1,500 kWh cliff. Air-con is the largest driver; cross the line and the generation rate jumps from ${lowGen.toStringAsFixed(2)} to ${highGen.toStringAsFixed(2)} sen/kWh on every unit.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: AppTheme.sp3),
@@ -2233,9 +2013,99 @@ class BillPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const SectionLabel('Tariff schedule'),
+          const SectionLabel('Details'),
           const SizedBox(height: 8),
-          const InfoCard(
+          // These overlap what your real myTNB statement already shows, so they
+          // sit collapsed — the forecast and attribution above are the part a
+          // single-meter app can't produce.
+          DetailsExpander(
+            title: 'Full bill breakdown (RP4 line items)',
+            subtitle: 'Same structure as your TNB statement',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final line in lines)
+                  BillLine(
+                    line.label,
+                    line.unitDetail,
+                    line.amountRm < 0
+                        ? '- ${formatRm(-line.amountRm)}'
+                        : formatRm(line.amountRm),
+                    positive: line.amountRm < 0,
+                  ),
+                const Divider(),
+                BillLine(
+                  'Projected total',
+                  'TNB RP4 standard schedule',
+                  formatRm(standardTotal),
+                  strong: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          DetailsExpander(
+            title: 'Standard vs Time-of-Use',
+            subtitle: saving >= 0
+                ? 'ToU cheaper by ${formatRm(saving)}/month'
+                : 'ToU costs ${formatRm(-saving)} more/month',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Based on your last 30 days. ToU peak hours are weekdays 2-10 PM; off-peak all other hours.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: PlanPanel(
+                        label: 'Standard',
+                        amount: formatRm(standardTotal),
+                        detail: '${eff.toStringAsFixed(2)} sen/kWh',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: PlanPanel(
+                        label: 'Time-of-Use',
+                        amount: formatRm(touTotal),
+                        detail: touPreview ? 'previewing' : 'est. ToU plan',
+                        recommended: true,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: onTogglePreview,
+                      icon: Icon(
+                        touPreview
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                      ),
+                      label: Text(
+                        touPreview ? 'Hide ToU preview' : 'Preview as ToU',
+                      ),
+                    ),
+                    FilledButton(
+                      onPressed: () => onOpenCoach('tou_switch'),
+                      child: const Text('See Coach to apply'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          const DetailsExpander(
+            title: 'Tariff schedule',
+            subtitle: 'RP4 · 1 Jul 2025 – 31 Dec 2027',
             child: Column(
               children: [
                 SettingsRow(
@@ -2263,9 +2133,356 @@ class BillPage extends StatelessWidget {
             icon: const Icon(Icons.picture_as_pdf_outlined),
             label: const Text('Download monthly report (PDF)'),
           ),
-          const SizedBox(height: 16),
-          const BillReferenceFooter(accountNo: '0123 4567 4291'),
         ],
+      ),
+    );
+  }
+}
+
+/// The forecast centrepiece: projected total, trend vs last month, and the cost
+/// attribution bar — AC measured by the clamp, the rest NILM-disaggregated.
+/// The attribution is the part a single-meter app (myTNB) can never show.
+class ForecastHero extends StatelessWidget {
+  const ForecastHero({
+    super.key,
+    required this.projectedTotal,
+    required this.baselineTotal,
+    required this.kwh,
+    required this.effSen,
+    required this.attribution,
+  });
+
+  final double projectedTotal;
+  final double baselineTotal;
+  final int kwh;
+  final double effSen;
+  final List<ApplianceCost> attribution;
+
+  Color _kindColor(String kind) {
+    switch (kind) {
+      case 'measured':
+        return AppTheme.primary;
+      case 'unknown':
+        return AppTheme.amber;
+      default:
+        return AppTheme.muted;
+    }
+  }
+
+  String _kindLabel(String kind) {
+    switch (kind) {
+      case 'measured':
+        return 'measured';
+      case 'unknown':
+        return 'unattributed';
+      default:
+        return 'estimated';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final delta = projectedTotal - baselineTotal;
+    final up = delta >= 0;
+    final total = attribution.fold<double>(0, (s, a) => s + a.amountRm);
+    return InfoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Projected this month',
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                formatRm(projectedTotal, decimals: 0),
+                style: Theme.of(context).textTheme.displayMedium,
+              ),
+              const SizedBox(width: 10),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Row(
+                  children: [
+                    Icon(
+                      up ? Icons.arrow_upward : Icons.arrow_downward,
+                      size: 14,
+                      color: up ? AppTheme.red : AppTheme.green,
+                    ),
+                    Text(
+                      '${formatRm(delta.abs(), decimals: 0)} vs last month',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: up ? AppTheme.red : AppTheme.green,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '$kwh kWh · ${effSen.toStringAsFixed(2)} sen/kWh effective',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: AppTheme.sp3),
+          Text(
+            "What's driving it",
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Row(
+              children: [
+                for (final a in attribution)
+                  Expanded(
+                    flex: (a.amountRm / (total == 0 ? 1 : total) * 1000)
+                        .round()
+                        .clamp(1, 1000),
+                    child: Container(height: 14, color: _kindColor(a.kind)),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (final a in attribution)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _kindColor(a.kind),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      a.appliance,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  Text(
+                    '${_kindLabel(a.kind)} · ',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  Text(
+                    formatRm(a.amountRm),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.text,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pull-mode companion to the Coach: the recommended actions rendered as
+/// toggles with a live composed forecast. Same savings, same engine — the
+/// Coach picks the plan, this lets the user explore combinations.
+class WhatIfSimulator extends StatefulWidget {
+  const WhatIfSimulator({
+    super.key,
+    required this.projectedTotal,
+    required this.levers,
+    required this.isShowcase,
+    required this.onOpenCoach,
+    this.onSimulate,
+  });
+
+  final double projectedTotal;
+  final List<CoachCardData> levers;
+  final bool isShowcase;
+  final ValueChanged<String> onOpenCoach;
+  final Future<ForecastSim> Function(List<String> keys)? onSimulate;
+
+  @override
+  State<WhatIfSimulator> createState() => _WhatIfSimulatorState();
+}
+
+class _WhatIfSimulatorState extends State<WhatIfSimulator> {
+  late Set<String> _selected;
+  // Backend composition (tariff-engine exact). Null until the first response,
+  // or whenever the selection changed and we're showing the client estimate.
+  ForecastSim? _server;
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    // Default = the Coach's recommended plan: every lever on.
+    _selected = {for (final l in widget.levers) l.keyName};
+    _recompute();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  // Debounced backend recompute. The server folds the levers through the tariff
+  // engine, so cliff/EEI band crossings are correct — unlike the client sum.
+  void _recompute() {
+    final simulate = widget.onSimulate;
+    if (simulate == null) return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () async {
+      final keys = _selected.toList();
+      try {
+        final result = await simulate(keys);
+        if (!mounted) return;
+        // Drop a stale response if the selection moved on while it was in flight.
+        if (_selected.length != keys.length || !_selected.containsAll(keys)) {
+          return;
+        }
+        setState(() => _server = result);
+      } catch (_) {
+        // Offline / error: fall back to the instant client estimate.
+      }
+    });
+  }
+
+  void _toggle(String key, bool on) {
+    setState(() {
+      if (on) {
+        _selected.add(key);
+      } else {
+        _selected.remove(key);
+      }
+      _server = null; // show client estimate instantly, reconcile on response
+    });
+    _recompute();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final clientSaving = _composedSaving(widget.levers, _selected);
+    final saving = _server?.savingRm ?? clientSaving;
+    final raw = widget.projectedTotal - saving;
+    final newForecast = _server?.composedTotalRm ?? (raw < 0 ? 0.0 : raw);
+    final exact = _server != null;
+    return InfoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.isShowcase
+                ? 'Showcase catalog — toggle any combination to see the forecast change.'
+                : 'Toggle the actions you would commit to. The forecast updates live.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          for (final l in widget.levers)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => widget.onOpenCoach(l.keyName),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            l.headline,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          Text(
+                            'save ${formatRm(l.rmMonthly)}/mo',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(color: AppTheme.green),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Switch(
+                    value: _selected.contains(l.keyName),
+                    onChanged: (on) => _toggle(l.keyName, on),
+                  ),
+                ],
+              ),
+            ),
+          const Divider(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    exact ? 'New forecast · tariff-engine exact' : 'New forecast · estimate',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  Text(
+                    formatRm(newForecast, decimals: 0),
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ],
+              ),
+              ChipLabel(
+                text: 'save ${formatRm(saving)}/mo',
+                color: saving > 0 ? AppTheme.green : AppTheme.muted,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A collapsed section for content that overlaps the user's real TNB statement.
+class DetailsExpander extends StatelessWidget {
+  const DetailsExpander({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        border: Border.all(color: AppTheme.divider),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: AppTheme.sp4),
+          title: Text(title, style: Theme.of(context).textTheme.titleMedium),
+          subtitle: Text(
+            subtitle,
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(
+            AppTheme.sp4,
+            0,
+            AppTheme.sp4,
+            AppTheme.sp4,
+          ),
+          children: [child],
+        ),
       ),
     );
   }
@@ -2956,7 +3173,6 @@ class RecommendationCard extends StatelessWidget {
                         ChipLabel(text: 'LIVE', color: AppTheme.green),
                       if (data.dataSource == 'replay')
                         ChipLabel(text: 'REPLAY', color: AppTheme.amber),
-                      SeverityTag(severity: data.severity),
                     ],
                   ),
                 ],
@@ -2971,23 +3187,60 @@ class RecommendationCard extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Icon(
-                    acted ? Icons.check_circle : Icons.savings_outlined,
-                    color: acted ? AppTheme.green : AppTheme.primary,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 6),
                   Expanded(
-                    child: Text(
-                      data.saving,
-                      style: TextStyle(
-                        fontSize: 19,
-                        color: acted ? AppTheme.green : AppTheme.text,
-                        fontWeight: FontWeight.w700,
-                        height: 1.1,
-                        letterSpacing: -0.3,
-                        decoration: acted ? TextDecoration.lineThrough : null,
-                      ),
+                    child: Wrap(
+                      spacing: 14,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Monthly\nsave',
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                            const SizedBox(width: 6),
+                            Icon(
+                              acted
+                                  ? Icons.check_circle
+                                  : Icons.payments_outlined,
+                              color: acted ? AppTheme.green : AppTheme.primary,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              formatRm(data.rmMonthly),
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: acted ? AppTheme.green : AppTheme.text,
+                                fontWeight: FontWeight.w700,
+                                height: 1.1,
+                                letterSpacing: -0.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.eco_outlined,
+                              color: AppTheme.green,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${_carbonLabel(data.rmMonthly)} CO₂',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: AppTheme.muted,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                   if (data.pushEligible && onSendWhatsApp != null) ...[
@@ -3553,22 +3806,6 @@ class FamilyTag extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class SeverityTag extends StatelessWidget {
-  const SeverityTag({super.key, required this.severity});
-
-  final String severity;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = switch (severity) {
-      'high' => AppTheme.red,
-      'medium' => AppTheme.amber,
-      _ => AppTheme.muted,
-    };
-    return ChipLabel(text: severity.toUpperCase(), color: color);
   }
 }
 

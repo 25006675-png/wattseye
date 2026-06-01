@@ -25,3 +25,5 @@ Thumbs.db
 .claude/
 
 .agents/
+
+backend/reminders.json

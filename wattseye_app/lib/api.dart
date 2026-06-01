@@ -48,9 +48,43 @@ class WattsEyeApi {
     _check(response);
   }
 
+  /// Schedule a WhatsApp reminder for a coach card, [fireInSeconds] from now.
+  Future<void> createReminder(
+    String archetypeKey,
+    int fireInSeconds, {
+    String headline = '',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/reminders'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'archetype_key': archetypeKey,
+        'fire_in_seconds': fireInSeconds,
+        'headline': headline,
+      }),
+    );
+    _check(response);
+  }
+
   Future<BillInfo> getBill() async {
     final response = await _get('/api/bill');
     return BillInfo.fromJson(_decodeMap(response.body));
+  }
+
+  /// Recompute the forecast for a chosen set of lever keys. The server composes
+  /// through the tariff engine (handles cliff/EEI band crossings), so the total
+  /// is correct for combinations, not a flat per-card sum.
+  Future<ForecastSim> simulateForecast(
+    List<String> selected, {
+    String mode = 'showcase',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/forecast/simulate'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'mode': mode, 'selected': selected}),
+    );
+    _check(response);
+    return ForecastSim.fromJson(_decodeMap(response.body));
   }
 
   /// Persist a user label/correction for an appliance signature so future
@@ -147,12 +181,57 @@ class BillLineItem {
   }
 }
 
+/// One slice of the forecast cost attribution. `kind` is 'measured' (AC clamp,
+/// exact), 'estimated' (NILM-disaggregated), or 'unknown' (unattributed residual).
+class ApplianceCost {
+  const ApplianceCost({
+    required this.appliance,
+    required this.amountRm,
+    required this.kind,
+  });
+
+  final String appliance;
+  final double amountRm;
+  final String kind;
+
+  factory ApplianceCost.fromJson(Map<String, dynamic> json) {
+    return ApplianceCost(
+      appliance: json['appliance']?.toString() ?? '',
+      amountRm: _number(json['amount_rm']),
+      kind: json['kind']?.toString() ?? 'estimated',
+    );
+  }
+}
+
+/// Result of a backend forecast composition for a chosen lever set.
+class ForecastSim {
+  const ForecastSim({
+    required this.composedTotalRm,
+    required this.savingRm,
+    required this.newKwh,
+  });
+
+  final double composedTotalRm;
+  final double savingRm;
+  final double newKwh;
+
+  factory ForecastSim.fromJson(Map<String, dynamic> json) {
+    return ForecastSim(
+      composedTotalRm: _number(json['composed_total_rm']),
+      savingRm: _number(json['saving_rm']),
+      newKwh: _number(json['new_kwh']),
+    );
+  }
+}
+
 class BillInfo {
   const BillInfo({
     required this.projectedTotalRm,
     required this.projectedKwh,
     required this.effectiveSenPerKwh,
     required this.touProjectedTotalRm,
+    this.baselineTotalRm = 0,
+    this.attribution = const [],
     this.highBandThresholdKwh = 1500,
     this.headroomKwh = 0,
     this.inHighBand = false,
@@ -165,6 +244,8 @@ class BillInfo {
   final double projectedKwh;
   final double effectiveSenPerKwh;
   final double touProjectedTotalRm;
+  final double baselineTotalRm;
+  final List<ApplianceCost> attribution;
   final double highBandThresholdKwh;
   final double headroomKwh;
   final bool inHighBand;
@@ -174,11 +255,19 @@ class BillInfo {
 
   factory BillInfo.fromJson(Map<String, dynamic> json) {
     final rawLines = json['lines'];
+    final rawAttribution = json['attribution'];
     return BillInfo(
       projectedTotalRm: _number(json['projected_total_rm']),
       projectedKwh: _number(json['projected_kwh']),
       effectiveSenPerKwh: _number(json['effective_sen_per_kwh']),
       touProjectedTotalRm: _number(json['tou_projected_total_rm']),
+      baselineTotalRm: _number(json['baseline_total_rm']),
+      attribution: rawAttribution is List
+          ? rawAttribution
+                .whereType<Map>()
+                .map((m) => ApplianceCost.fromJson(Map<String, dynamic>.from(m)))
+                .toList()
+          : const [],
       highBandThresholdKwh: json['high_band_threshold_kwh'] == null
           ? 1500
           : _number(json['high_band_threshold_kwh']),
