@@ -53,6 +53,25 @@ class WattsEyeApi {
     return BillInfo.fromJson(_decodeMap(response.body));
   }
 
+  /// Persist a user label/correction for an appliance signature so future
+  /// detections can match it. [kind] is 'device' | 'multiple' | 'unsure'.
+  Future<void> labelAppliance({
+    required String appliance,
+    required String kind,
+    String? device,
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/appliance/label'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'appliance': appliance,
+        'kind': kind,
+        'device': ?device,
+      }),
+    );
+    _check(response);
+  }
+
   Future<List<HistoryDay>> getHistory() async {
     final response = await _get('/api/history');
     final map = _decodeMap(response.body);
@@ -108,25 +127,75 @@ class WattsEyeApi {
   }
 }
 
+class BillLineItem {
+  const BillLineItem({
+    required this.label,
+    required this.amountRm,
+    required this.unitDetail,
+  });
+
+  final String label;
+  final double amountRm;
+  final String unitDetail;
+
+  factory BillLineItem.fromJson(Map<String, dynamic> json) {
+    return BillLineItem(
+      label: json['label']?.toString() ?? '',
+      amountRm: _number(json['amount_rm']),
+      unitDetail: json['unit_detail']?.toString() ?? '',
+    );
+  }
+}
+
 class BillInfo {
   const BillInfo({
     required this.projectedTotalRm,
     required this.projectedKwh,
     required this.effectiveSenPerKwh,
     required this.touProjectedTotalRm,
+    this.highBandThresholdKwh = 1500,
+    this.headroomKwh = 0,
+    this.inHighBand = false,
+    this.lowBandGenSen = 27.03,
+    this.highBandGenSen = 37.03,
+    this.lines = const [],
   });
 
   final double projectedTotalRm;
   final double projectedKwh;
   final double effectiveSenPerKwh;
   final double touProjectedTotalRm;
+  final double highBandThresholdKwh;
+  final double headroomKwh;
+  final bool inHighBand;
+  final double lowBandGenSen;
+  final double highBandGenSen;
+  final List<BillLineItem> lines;
 
   factory BillInfo.fromJson(Map<String, dynamic> json) {
+    final rawLines = json['lines'];
     return BillInfo(
       projectedTotalRm: _number(json['projected_total_rm']),
       projectedKwh: _number(json['projected_kwh']),
       effectiveSenPerKwh: _number(json['effective_sen_per_kwh']),
       touProjectedTotalRm: _number(json['tou_projected_total_rm']),
+      highBandThresholdKwh: json['high_band_threshold_kwh'] == null
+          ? 1500
+          : _number(json['high_band_threshold_kwh']),
+      headroomKwh: _number(json['headroom_kwh']),
+      inHighBand: json['in_high_band'] == true,
+      lowBandGenSen: json['low_band_gen_sen'] == null
+          ? 27.03
+          : _number(json['low_band_gen_sen']),
+      highBandGenSen: json['high_band_gen_sen'] == null
+          ? 37.03
+          : _number(json['high_band_gen_sen']),
+      lines: rawLines is List
+          ? rawLines
+                .whereType<Map>()
+                .map((m) => BillLineItem.fromJson(Map<String, dynamic>.from(m)))
+                .toList()
+          : const [],
     );
   }
 }
@@ -253,12 +322,16 @@ class ActiveAppliance {
     required this.watts,
     required this.todayKwh,
     required this.todayRm,
+    this.kind = 'estimated',
+    this.monthCostRm = 0,
   });
 
   final String name;
   final double watts;
   final double todayKwh;
   final double todayRm;
+  final String kind; // 'measured' | 'estimated' | 'unknown'
+  final double monthCostRm;
 
   factory ActiveAppliance.fromJson(Map<String, dynamic> json) {
     return ActiveAppliance(
@@ -266,6 +339,8 @@ class ActiveAppliance {
       watts: _number(json['watts']),
       todayKwh: _number(json['today_kwh']),
       todayRm: _number(json['today_rm']),
+      kind: json['kind']?.toString() ?? 'estimated',
+      monthCostRm: _number(json['month_cost_rm']),
     );
   }
 }

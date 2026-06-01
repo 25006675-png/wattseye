@@ -6,7 +6,7 @@ void main() {
     await tester.pumpWidget(const WattsEyeApp());
 
     expect(find.text('Dashboard'), findsWidgets);
-    expect(find.text('Current power'), findsOneWidget);
+    expect(find.text('COST THIS MONTH'), findsOneWidget);
     expect(find.text('Coach'), findsOneWidget);
   });
 }

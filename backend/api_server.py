@@ -31,12 +31,24 @@ from ML.insights.coach.coach_engine import (  # noqa: E402
     generate_cards,
 )
 from ML.insights.coach.whatsapp import (  # noqa: E402
+    PUSH_ARCHETYPES,
     SETUP_ENV_VARS,
     MetaConfig,
     send_card_via_whatsapp,
 )
 from ML.insights.coach.whatsapp_webhook import record_user_action  # noqa: E402
+from ML.insights.tnb_tariff import (  # noqa: E402
+    RP4,
+    calculate_standard_bill,
+    calculate_tou_bill,
+)
 from backend.live_state import read_live_state  # noqa: E402
+
+# Demo projection: a household coasting ~20 kWh under the RP4 1,500 kWh
+# high-band cliff, so the Bill page tells the same near-cliff story as the
+# rp4_tier_cliff coach card (instead of an unrelated 460 kWh fixture).
+DEMO_PROJECTED_KWH = 1480.0
+DEMO_PEAK_FRACTION = 0.35
 
 # In-app action vocabulary -> learning-loop intent vocabulary.
 # "none" means the user un-acted a card; we drop it from the loop log because
@@ -50,16 +62,22 @@ def dashboard_payload() -> dict[str, Any]:
     # Live data wins when the Pi runtime (pi_bridge.py) is publishing a fresh
     # live_state.json; otherwise fall back to the built-in demo snapshot. The
     # app flips its "Demo data" / "Live Pi" chip purely on the JSON it sees.
+    from datetime import datetime
+
     live = read_live_state()
     if live is not None:
         return live
 
     snap = _demo_snapshot()
+    _std = calculate_standard_bill(DEMO_PROJECTED_KWH)
+    # Month-to-date estimate from today's spend (= daily run-rate x days elapsed).
+    # Honest extrapolation; a per-appliance accumulator can replace it later.
+    days_elapsed = max(datetime.now().day, 1)
     return {
         "timestamp": snap.timestamp.isoformat(timespec="seconds"),
         "live_power_w": snap.live_power_w,
-        "today_cost_rm": 4.97,
-        "projected_bill_rm": 149.18,
+        "today_cost_rm": round(_std.total_rm / 30.0, 2),
+        "projected_bill_rm": _std.total_rm,
         "occupancy_state": snap.occupancy_state,
         "occupancy_since": snap.occupancy_since.isoformat(timespec="seconds"),
         "active_appliances": [
@@ -67,10 +85,47 @@ def dashboard_payload() -> dict[str, Any]:
                 "name": name,
                 "watts": values.get("watts", 0),
                 "today_kwh": 8.4 if name == "ac" else 2.6,
-                "today_rm": 2.68 if name == "ac" else 0.83,
+                "today_rm": (today_rm := 2.68 if name == "ac" else 0.83),
+                "kind": "measured" if name == "ac" else "estimated",
+                "month_cost_rm": round(today_rm * days_elapsed, 2),
             }
             for name, values in snap.active_appliances.items()
         ],
+    }
+
+
+def bill_payload() -> dict[str, Any]:
+    """Real TNB RP4 bill for the demo projection, computed by tnb_tariff.
+
+    Uses the same near-cliff kWh as the rp4_tier_cliff coach card so the Bill
+    page and the Coach agree. Returns the itemised breakdown and the high-band
+    cliff metadata the app needs to draw the 1,500 kWh gauge.
+    """
+    kwh = DEMO_PROJECTED_KWH
+    std = calculate_standard_bill(kwh)
+    peak = round(kwh * DEMO_PEAK_FRACTION, 1)
+    off = round(kwh - peak, 1)
+    tou = calculate_tou_bill(peak, off)
+    threshold = RP4.high_band_threshold_kwh
+    return {
+        "projected_total_rm": std.total_rm,
+        "projected_kwh": std.monthly_kwh,
+        "effective_sen_per_kwh": std.effective_sen_per_kwh,
+        "tou_projected_total_rm": tou.total_rm,
+        "high_band_threshold_kwh": threshold,
+        "headroom_kwh": round(threshold - kwh, 1),
+        "in_high_band": kwh > threshold,
+        "low_band_gen_sen": RP4.standard.generation_low_band_sen,
+        "high_band_gen_sen": RP4.standard.generation_high_band_sen,
+        "lines": [
+            {
+                "label": line.label,
+                "amount_rm": round(line.amount_rm, 2),
+                "unit_detail": line.unit_detail,
+            }
+            for line in std.lines
+        ],
+        "notes": std.notes,
     }
 
 
@@ -79,6 +134,9 @@ def coach_cards_payload(mode: str = "showcase") -> list[dict[str, Any]]:
     payload = cards_to_json(cards)
     for card in payload:
         card["data_source"] = source
+        # Authoritative WhatsApp-push subset (see extra_info/whatsapp.md): only
+        # these archetypes earn a phone buzz; the rest stay in-app only.
+        card["push_eligible"] = card["archetype_key"] in PUSH_ARCHETYPES
         action = USER_ACTIONS.get(card["archetype_key"])
         if action is not None:
             card["user_action"] = action
@@ -285,6 +343,40 @@ def ac_cutoff_payload(body: dict[str, Any]) -> dict[str, Any]:
     return {"sent": True, "topic": "wattseye/ac/command", "command": command}
 
 
+APPLIANCE_LABELS_PATH = ROOT / "backend" / "_appliance_labels.json"
+
+
+def appliance_label_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Persist a user label/correction for an appliance signature.
+
+    Appends to a JSON log the future signature-matcher can consume as ground
+    truth. kind is 'device' | 'multiple' | 'unsure'; 'device' carries the typed
+    appliance name. Degrades honestly: a malformed kind is rejected.
+    """
+    from datetime import datetime
+
+    appliance = str(body.get("appliance") or "").strip()
+    kind = str(body.get("kind") or "").strip()
+    if kind not in {"device", "multiple", "unsure"}:
+        return {"ok": False, "reason": "invalid kind"}
+
+    record = {
+        "appliance": appliance,
+        "kind": kind,
+        "device": (str(body.get("device")).strip() if body.get("device") else None),
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        existing: list[Any] = []
+        if APPLIANCE_LABELS_PATH.exists():
+            existing = json.loads(APPLIANCE_LABELS_PATH.read_text("utf-8")) or []
+        existing.append(record)
+        APPLIANCE_LABELS_PATH.write_text(json.dumps(existing, indent=2), "utf-8")
+    except Exception as exc:  # disk/permissions — be honest, don't fake success
+        return {"ok": False, "reason": f"could not persist: {exc}", "record": record}
+    return {"ok": True, "stored": record}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "WattsEyeApi/0.1"
 
@@ -321,14 +413,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/whatsapp/status":
             self._send_json(whatsapp_status_payload())
         elif path == "/api/bill":
-            self._send_json(
-                {
-                    "projected_total_rm": 149.18,
-                    "projected_kwh": 460,
-                    "effective_sen_per_kwh": 32.43,
-                    "tou_projected_total_rm": 143.80,
-                }
-            )
+            self._send_json(bill_payload())
         elif path == "/api/history":
             self._send_json(
                 {
@@ -357,6 +442,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ac/cutoff":
                 self._send_json(ac_cutoff_payload(self._read_json()))
+                return
+            if path == "/api/appliance/label":
+                self._send_json(appliance_label_payload(self._read_json()))
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return

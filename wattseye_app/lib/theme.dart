@@ -11,6 +11,37 @@ class AppTheme {
   static const amber = Color(0xFFD4A02A);
   static const red = Color(0xFFCC4444);
 
+  // Spacing scale (use instead of ad-hoc magic numbers).
+  static const double sp1 = 4;
+  static const double sp2 = 8;
+  static const double sp3 = 12;
+  static const double sp4 = 16;
+  static const double sp6 = 24;
+  static const double radius = 14;
+
+  // Single corner radius for all pill/tag chips (was a mix of 4/6/20).
+  static const double chipRadius = 6;
+
+  // TNB myTNB-inspired palette — scoped to the Bill page so it reads like a
+  // real TNB statement without re-skinning the whole app.
+  static const tnbTeal = Color(0xFF00A19C);
+  static const tnbTealDark = Color(0xFF007E7A);
+  static const tnbTealBg = Color(0xFFE6F5F4);
+  static const tnbOrange = Color(0xFFF47B20);
+  static const tnbOrangeBg = Color(0xFFFDEEE2);
+
+  // TNB printed-statement palette — the paper "Bil Elektrik Anda" look:
+  // red logo lockup, ink text on white, and the iconic yellow amount-due box.
+  static const tnbRed = Color(0xFFE2231A);
+  static const tnbInk = Color(0xFF20262E);
+  // TNB corporate blue band (light -> dark) for the statement masthead.
+  static const tnbBlueLight = Color(0xFF5E9BEC);
+  static const tnbBlueDark = Color(0xFF254A8E);
+  static const billYellowBg = Color(0xFFFFF6DA); // pale callout fill
+  static const billYellowBar = Color(0xFFF4C430); // callout accent
+  static const billYellowBorder = Color(0xFFEAD089);
+  static const statementBorder = Color(0xFFE3E6EB);
+
   static const wasteBorder = Color(0xFFE07B3F);
   static const wasteTagBg = Color(0xFFFCEEE1);
   static const wasteTagText = Color(0xFF8A4515);
@@ -38,6 +69,26 @@ class AppTheme {
       ),
       fontFamily: 'Inter',
       textTheme: const TextTheme(
+        // Hero metric numbers (today's cost, AC watts, bill total). Semibold
+        // with tight tracking + tabular figures — the refined look modern
+        // consumer apps use, not chunky extra-bold. Use these instead of
+        // hand-rolling copyWith(fontSize: ...) per page.
+        displayLarge: TextStyle(
+          fontSize: 36,
+          fontWeight: FontWeight.w600,
+          height: 1.05,
+          letterSpacing: -0.8,
+          color: text,
+          fontFeatures: [FontFeature.tabularFigures()],
+        ),
+        displayMedium: TextStyle(
+          fontSize: 30,
+          fontWeight: FontWeight.w600,
+          height: 1.05,
+          letterSpacing: -0.6,
+          color: text,
+          fontFeatures: [FontFeature.tabularFigures()],
+        ),
         titleLarge: TextStyle(
           fontSize: 22,
           fontWeight: FontWeight.w700,
@@ -81,7 +132,7 @@ class AppTheme {
         color: surface,
         elevation: 0,
         margin: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: surface,

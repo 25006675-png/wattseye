@@ -1,71 +1,168 @@
-# WattsEye — gap analysis & wiring log
+Inspected the full Flutter app (2,420 lines), api.dart, the backend routes, and the Pi-side code. Here's what I found across all three.
 
-Record of the UI/logic/Pi gaps found in review and what was implemented to close
-them. Hardware (clamp install, calibration) is explicitly out of scope here.
+# 1. UI/UX — what I'd change (hackathon, AI era)
 
-## Gaps found
+The app is competent Material-3, but in an era where every team ships a polished AI-built UI, "5 clean tabs" is the floor. The wins are about hierarchy, integrity, and the one signature interaction — not more screens.
 
-1. **Coach cards ran on a hardcoded literal**, not real data. The only
-   `HomeSnapshot` in the codebase was `_demo_snapshot()`. `/api/coach/cards`
-   never read `synthetic_history` or `live_state` — the engine was real, the
-   input was a fixture. Dashboard could go live while the coach stayed frozen.
-2. **UI surfaces not wired to existing endpoints.** `/api/bill` and
-   `/api/history` were served but never called — Bill and History pages were
-   100% hardcoded. `/api/weather`, `/api/report/monthly` also unused.
-3. **Fake "Turn off" button** — showed a snackbar, called nothing; no cutoff
-   API route existed (only MQTT inside pi_bridge).
-4. **No way to show both** the 12-card showcase *and* a sparse live set.
-5. **Live NILM not wired into the Pi runtime** — `pi_bridge` lumps non-AC load
-   into one "other" bucket; no per-appliance disaggregation at runtime.
+## a. Money-first hierarchy is inverted.
 
-## Implemented (this pass)
+The dashboard hero is LivePowerCard → "1.42 kW." Users don't think in kW; they think in ringgit. Lead with today's cost + projected bill + "RM avoidable right now," and demote kW to a secondary stat. This is the same ringgit-over-carbon-over-watts point — the kW-as-hero is an engineer's instinct, not a user's.
 
-- **`backend/snapshot_builder.py`** — `from_live_state()` (Pi feed) and
-  `from_history()` (synthetic_history.sqlite / real bench log) build a real
-  `HomeSnapshot`. Events come from threshold segmentation; projected kWh,
-  standby, peak-window fraction, AC routine baseline all derived from the log.
-- **Coach modes** — `/api/coach/cards?mode=showcase|live`.
-  `showcase` → demo literal (full archetype set). `live` → Pi live_state if
-  fresh, else bench-log history, else demo. Each card tagged `data_source`
-  (`live` / `replay` / `showcase`). Verified: showcase→10 cards, live→2 cards
-  (`replay`) from the bench log.
-- **Real cutoff endpoint** — `POST /api/ac/cutoff` publishes the MQTT off-command
-  on `wattseye/ac/command` (pi_bridge → ESP32). Degrades honestly (paho missing
-  / broker down → `sent:false` with reason; never fakes success).
-- **App wiring (Flutter, 5 tabs kept):**
-  - Coach tab: Showcase/Live `SegmentedButton`; per-card `LIVE`/`REPLAY` chip.
-  - Bill page: headline total / kWh / effective rate / ToU comparison from
-    `/api/bill` (falls back to demo numbers offline).
-  - History page: live "Recent days" card from `/api/history`.
-  - "Turn off" button: now calls `/api/ac/cutoff` and reports the real result.
-  - `flutter analyze lib/` → no issues.
+## b. The "Turn off" button is a fake snackbar
 
-## Live NILM — wired (guarded), with honest limits
+(main.dart:636 → _snack(context, 'AC turn-off command sent')).
 
-- **`backend/nilm_runtime.py`** runs the faithful Discriminator
-  (`electricity_model.py`) over a rolling residual window → per-appliance watts +
-  on/off. Wired into `pi_bridge` behind `WATTSEYE_NILM=1` (off by default);
-  populates `active_appliances` with per-appliance tiles, else falls back to the
-  "other" bucket. Throttled to every ~6 s; degrades safely if torch/checkpoints
-  absent. Self-test still passes with it off.
-- **Proven:** the model port is byte-exact vs the training repo (max diff 0.0),
-  and on a real UK-DALE House-2 kettle window it predicts ~2130 W vs 2879 W gt.
-- **Hard limits found (documented in the module):** the model is **brittle to
-  normalisation** — only the UK-DALE training stats (x_mean≈300, x_std≈471) give
-  sane output; 522/814 and window self-normalisation both give 0 W. So live **rig**
-  accuracy needs **fine-tuning** (raw rig watts are off-distribution). Models key
-  on appliance **shape**. Readout uses recent-max (not the seq2point centre), so
-  measured first-detection latency is **~6-12 s** on a real kettle stream, with
-  some cross-talk to similar-wattage resistive loads (kettle/hair-dryer). Net:
-  live per-appliance NILM is workable for a distinctive load like the kettle, but
-  needs rig fine-tuning for reliability — keep the empty-room cutoff as the
-  guaranteed live moment.
+It calls nothing.
 
-## Still open
+In a live hardware demo, a button that pretends to act is a credibility landmine — if a judge taps it and the hair dryer keeps running, you're done.
 
-- **`recent_events` from live NILM** (event segmentation on the live stream) — the
-  tiles are wired; turning them into discrete coach events is the next step.
-- **Sensor calibration** — `power_math` constants are placeholders; live watts
-  need the `build_now/08` calibration before they're trustworthy.
-- **Minor:** drop unused `flask` from `backend/requirements.txt`; optional
-  `run_pi.sh` to launch broker+reader+bridge+api together.
+Either wire it to the real cutoff or remove it and make WhatsApp the only action button (which is wired). Integrity > feature.
+
+## c. Design for the sparse live reality.
+
+Offline/demo shows 12 cards; live data realistically yields 1–2. Right now the Coach page is built around a 12-card wall that will look empty and broken in live mode.
+
+Design the 1–2-card state to look intentional ("Your home is running clean right now"), not like a failure.
+
+## d. Provenance belongs per-card, not just one global chip.
+
+The Demo data / Live Pi chip (main.dart:490) is your single most important honesty signal, but one global chip can't express "this card is live, those are replay."
+
+Tag each card.
+
+This is exactly the live-vs-replay labeling we discussed — it's the difference between "honest" and "got caught."
+
+## e. The explainable coach card is your crown jewel — make it the spine, and show the loop learn.
+
+The "Why this appeared" + math + impact is genuinely differentiated and auditable.
+
+But dismissal (_markAction) just mutates state silently.
+
+Make dismissal visibly re-rank ("we'll show this less, here's what's next") — that's what lets you honestly claim "it learns from rejection" instead of "tips feed."
+
+## f. Your two unique features are buried and hardcoded.
+
+The 1,500 kWh cliff and ToU comparator are the things no foreign product has — and they're static text on the Bill page.
+
+Give the cliff a visual gauge ("you are here → cliff at 1500") and ToU a side-by-side.
+
+Memorable + uniquely Malaysian.
+
+## g. Cut History + Profile from the demo path.
+
+They're filler that eats judge time and invites "is this real?" questions.
+
+Five tabs says "we built an app"; one hero flow says "we solved a problem."
+
+## h. "Bilingual" is a deck claim with zero UI evidence — the app is English-only.
+
+Either show one BM string/toggle, or move the bilingual proof to the WhatsApp thread (its more authentic home) and don't claim it in the app.
+
+# 2. UI logic NOT wired to backend (hardware excluded)
+
+The backend serves more than the app consumes. Confirmed gaps:
+
+| UI surface | Backend endpoint | Status |
+|---|---:|---|
+| Bill page | /api/bill exists (projected, kWh, effective sen, ToU) | Not called — fully hardcoded |
+| History page | /api/history exists (daily cost) | Not called — static const HistoryPage() |
+| Weather (anywhere in UI) | /api/weather exists (real Open-Meteo) | Never called (only feeds coach server-side) |
+| Monthly PDF report | /api/report/monthly exists (reportlab) | No UI button to view/download |
+| Live NILM inference | /api/ml/nilm/infer, /api/ml/status exist | App only reads nilm_model_count; no inference UI |
+| "Turn off" AC | No API route at all (cutoff is MQTT-only) | Cosmetic snackbar |
+
+Wired correctly:
+
+- dashboard
+- coach cards (GET)
+- coach action (POST do/remind/dismiss)
+- integration status
+- WhatsApp send
+
+The offline fallback to hardcoded _coachCards is good resilient design.
+
+Net: Bill and History are the two pages most likely to be probed ("is this your real data?") and they're the two that are 100% hardcoded despite the backend already serving the data.
+
+Wiring those two is ~30 lines in api.dart + the page constructors, and it's the highest-credibility-per-effort fix in the app.
+
+# 3. Can the Pi run the codebase? Is it complete?
+
+Mostly yes for the sensing→cutoff→dashboard loop; no for live appliance breakdown.
+
+## What works:
+
+- ads1115_reader.py imports cleanly off-Pi — board/busio/paho are lazy-imported, and --simulate / --no-mqtt let you run the whole pipeline on a laptop. On the Pi it needs adafruit-circuitpython-ads1x15 (in requirements.txt, correctly ARM-gated) + paho-mqtt + I2C enabled.
+- pi_bridge.py self-test passes (I ran python -m backend.pi_bridge --self-test → PASSED, cutoff fires once, debounces, re-arms, writes valid dashboard JSON).
+- api_server.py is stdlib http.server — runs anywhere.
+- Chain is complete:
+
+mosquitto → reader → bridge → api → app
+
+and docs/build_now/02–03 cover Pi setup/run.
+
+## Real gaps:
+
+### 1. Live NILM is not in the pipeline.
+
+pi_bridge lumps everything non-AC into one "other" bucket (pi_bridge.py:156) — there's no per-appliance disaggregation at runtime.
+
+The faithful electricity_model.py exists but nothing calls it in the live loop.
+
+So on the Pi you get:
+
+- total
+- AC
+- other
+
+not kettle/fridge tiles.
+
+This is the piece I keep offering to wire.
+
+### 2. Calibration constants are placeholders.
+
+VOLTS_PER_VOLT = 240 # placeholder
+
+plus the SCT-013 scale.
+
+It will run and publish watts, but the numbers are uncalibrated until you do build_now/08.
+
+Don't trust the live wattage before calibration.
+
+### 3. requirements.txt lists flask>=3.0 which is unused.
+
+The API is stdlib http.server.
+
+Harmless but misleading — drop it.
+
+### 4. No process orchestration.
+
+No systemd units or single launch script currently bring up:
+
+- broker
+- reader
+- bridge
+- api
+
+together.
+
+The run doc lists manual steps.
+
+Minor, but a one-shot run_pi.sh would de-risk the demo.
+
+---
+
+# Highest-leverage fixes, ranked
+
+1. Wire Bill + History to their existing endpoints  
+   Cheap, kills the “is it real?” probe.
+
+2. Remove or wire the fake Turn-off button  
+   Biggest integrity fix.
+
+3. Money-first dashboard + per-card provenance  
+   Better judge comprehension.
+
+4. Wire live NILM → per-appliance tiles + events  
+   Unlocks live breakdown and real coach cards from bench log.
+
+Want me to do #1 and #2 now (pure software, no hardware needed), and/or #4 (the live NILM wiring into pi_bridge)?
