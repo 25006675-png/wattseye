@@ -49,9 +49,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from backend import reminders, smart_rules  # noqa: E402
 from backend.live_state import write_live_state  # noqa: E402
-from ML.insights.models import ApplianceEvent  # noqa: E402
-from ML.insights.occupancy_engine import analyze_occupancy  # noqa: E402
 
 POWER_TOPIC = "wattseye/power"
 OCCUPANCY_TOPIC = "wattseye/occupancy"
@@ -113,30 +112,22 @@ def _accumulate_energy(state: BridgeState) -> None:
         state.wh_today = 0.0
 
 
-def decide_ac_cutoff(state: BridgeState) -> dict | None:
-    """Return an AC command dict if the empty-room rule fires, else None.
+def decide_ac_action(state: BridgeState, rule: dict | None = None) -> dict | None:
+    """Return the smart-rule decision if it fires this tick, else None.
 
-    Reuses the shipped occupancy_engine thresholds (HIGH_POWER_WATTS=700,
-    EMPTY_ROOM_MINUTES=10) so the live behaviour matches the demo/insight path.
+    Delegates the waste detection + threshold/mode logic to backend.smart_rules
+    (which reuses occupancy_engine). Debounced via state.cutoff_sent so one empty
+    episode acts at most once. The decision's "action" is "auto_off" or "remind";
+    the caller decides whether to drive the AC or just nudge the user.
     """
-    event = ApplianceEvent(
-        timestamp=datetime.now(),
-        appliance="inverter_ac",
-        power_watts=state.ac_watts,
-        duration_minutes=state.empty_minutes,
-        occupied=state.occupied,
-        source="live",
-        confidence=0.99,
+    if state.cutoff_sent:
+        return None
+    decision = smart_rules.evaluate(
+        state.ac_watts, state.empty_minutes, state.occupied, rule
     )
-    result = analyze_occupancy(event)
-    if result.status == "empty_room_waste" and not state.cutoff_sent:
+    if decision is not None:
         state.cutoff_sent = True
-        return {
-            "command": "off",
-            "reason": result.status,
-            "ts": datetime.now().isoformat(timespec="seconds"),
-        }
-    return None
+    return decision
 
 
 def build_dashboard_payload(state: BridgeState) -> dict:
@@ -248,10 +239,31 @@ def run_live(broker: str, port: int) -> None:
                 except Exception:
                     state._nilm_result = {}
                 state._last_nilm_ts = time.time()
-            command = decide_ac_cutoff(state)
-            if command is not None:
-                client.publish(AC_COMMAND_TOPIC, json.dumps(command), qos=1)
-                print(f"--> AC cutoff command published: {command}")
+            # Re-read the rule each tick so a change made in the app (POST
+            # /api/ac/rule) takes effect within ~1s without restarting the bridge.
+            decision = decide_ac_action(state, smart_rules.load_rule())
+            if decision is not None:
+                if decision["action"] == "auto_off":
+                    command = {
+                        "command": "off",
+                        "reason": decision["reason"],
+                        "ts": datetime.now().isoformat(timespec="seconds"),
+                    }
+                    client.publish(AC_COMMAND_TOPIC, json.dumps(command), qos=1)
+                    print(f"--> AC auto-off published (smart rule): {command}")
+                else:  # "remind": nudge the user via WhatsApp, don't touch the AC
+                    # Schedule an immediately-due reminder; the daemon running in
+                    # api_server (reminders.start) picks it up within ~5s and pushes
+                    # the left_on_empty card over WhatsApp. Debounced once/episode by
+                    # state.cutoff_sent, so it can't spam.
+                    reminders.schedule(
+                        "left_on_empty",
+                        datetime.now(),
+                        headline=(f"AC drawing {decision['ac_watts']:.0f}W in an empty "
+                                  f"room ({decision['empty_minutes']:.0f} min)."),
+                    )
+                    print(f"--> Smart rule REMIND -> WhatsApp queued: AC "
+                          f"{decision['ac_watts']}W, room empty {decision['empty_minutes']} min")
             write_live_state(build_dashboard_payload(state))
             time.sleep(TICK_INTERVAL_S)
     except KeyboardInterrupt:
@@ -272,30 +284,48 @@ def run_self_test() -> int:
     """
     state = BridgeState()
     commands: list[dict] = []
+    # Explicit rule (10-min threshold, auto-off) so the test is deterministic and
+    # independent of any _smart_rule.json on disk.
+    auto_rule = {"enabled": True, "empty_minutes": 10.0, "mode": "auto_off"}
 
-    # 1) Occupied, AC running hard -> no cutoff.
+    # 1) Occupied, AC running hard -> no action.
     apply_power_message(state, {"main_watts": 1800, "ac_watts": 1200, "residual_watts": 600, "vrms": 240})
     apply_occupancy_message(state, {"occupied": True})
-    assert decide_ac_cutoff(state) is None, "should not cut off while occupied"
+    assert decide_ac_action(state, auto_rule) is None, "should not act while occupied"
 
-    # 2) Room goes empty, but only just now -> still no cutoff (under 10 min).
+    # 2) Room goes empty, but only just now -> still nothing (under threshold).
     apply_occupancy_message(state, {"occupied": False})
-    assert decide_ac_cutoff(state) is None, "should not cut off before EMPTY_ROOM_MINUTES"
+    assert decide_ac_action(state, auto_rule) is None, "should not act before the threshold"
 
-    # 3) Backdate the empty timestamp past the threshold -> cutoff fires once.
+    # 3) Backdate the empty timestamp past the threshold -> auto-off fires once.
     state.occupancy_since = datetime.now() - timedelta(minutes=12)
-    cmd = decide_ac_cutoff(state)
-    assert cmd is not None and cmd["command"] == "off", "cutoff should fire after 12 min empty + high AC"
-    commands.append(cmd)
+    decision = decide_ac_action(state, auto_rule)
+    assert decision is not None and decision["action"] == "auto_off", \
+        "auto-off should fire after 12 min empty + high AC"
+    commands.append(decision)
 
     # 4) Debounce: a second evaluation in the same episode does NOT re-fire.
-    assert decide_ac_cutoff(state) is None, "cutoff must not repeat within one empty episode"
+    assert decide_ac_action(state, auto_rule) is None, "must not repeat within one empty episode"
 
     # 5) Re-occupied then empty again -> re-arms and can fire once more.
     apply_occupancy_message(state, {"occupied": True})
     apply_occupancy_message(state, {"occupied": False})
     state.occupancy_since = datetime.now() - timedelta(minutes=15)
-    assert decide_ac_cutoff(state) is not None, "should re-arm after re-occupancy"
+    assert decide_ac_action(state, auto_rule) is not None, "should re-arm after re-occupancy"
+
+    # 6) Disabled rule -> never acts, even with a long empty episode.
+    apply_occupancy_message(state, {"occupied": True})
+    apply_occupancy_message(state, {"occupied": False})
+    state.occupancy_since = datetime.now() - timedelta(minutes=30)
+    assert decide_ac_action(state, {"enabled": False, "empty_minutes": 10.0, "mode": "auto_off"}) is None, \
+        "disabled rule must never act"
+
+    # 7) Remind mode -> fires with action='remind' (nudge, not a cutoff).
+    apply_occupancy_message(state, {"occupied": True})
+    apply_occupancy_message(state, {"occupied": False})
+    state.occupancy_since = datetime.now() - timedelta(minutes=20)
+    remind = decide_ac_action(state, {"enabled": True, "empty_minutes": 15.0, "mode": "remind"})
+    assert remind is not None and remind["action"] == "remind", "remind mode should produce a remind decision"
 
     # 6) live_state.json is written in the exact dashboard shape.
     state.wh_today = 5200.0  # 5.2 kWh so far today

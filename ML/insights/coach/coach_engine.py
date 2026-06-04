@@ -126,7 +126,7 @@ def _demo_snapshot() -> HomeSnapshot:
         inefficient_continuous_loads=[
             {"appliance": "fridge", "current_w": 180, "efficient_class_w": 90,
              "replacement_rm": 1800,
-             "registry_url": "https://www.st.gov.my/en/energy-efficient-appliances"},
+             "registry_url": "https://edik.st.gov.my/publicenquiry/search.aspx"},
         ],
     )
 

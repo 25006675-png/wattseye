@@ -16,6 +16,9 @@ ML/insights/coach/_user_actions.json
 
 # Pi runtime state — written by pi_bridge.py, read by api_server.py
 backend/live_state.json
+# User-set AC smart rule + appliance labels — runtime state, not source
+backend/_smart_rule.json
+backend/_appliance_labels.json
 
 # OS / editor / agent
 .DS_Store
@@ -27,3 +30,8 @@ Thumbs.db
 .agents/
 
 backend/reminders.json
+
+# Downloaded third-party datasets (large; not part of the repo)
+datasets/
+flutter-web.err
+wattseye_app/flutter-web.err

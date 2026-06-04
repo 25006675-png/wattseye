@@ -15,11 +15,8 @@ cost_engine.py
 occupancy_engine.py
   Detects high-power empty-room waste.
 
-health_engine.py
-  Flags appliance behavior changes such as long fridge cycles.
-
 insight_orchestrator.py
-  Combines routine, cost, occupancy, and health results into one dashboard object.
+  Combines routine, cost, and occupancy results into one dashboard object.
 ```
 
 Quick tariff sanity check:

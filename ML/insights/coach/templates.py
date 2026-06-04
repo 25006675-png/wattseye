@@ -6,7 +6,7 @@ Situation.raw_metrics or .extra_quantified — auditable line by line.
 
 from __future__ import annotations
 
-from .situations import Card, Situation
+from .situations import GRID_EMISSION_KG_PER_KWH, Card, Situation
 
 
 EFFORT_LABEL = {"low": "Low effort", "medium": "Medium effort", "high": "High effort"}
@@ -232,6 +232,7 @@ def _t_inefficient_upgrade(s: Situation) -> Card:
 
 def _build(s: Situation, headline: str, impact: str, action: str, math: list[str]) -> Card:
     saving_text = f"Expected saving: {_rm(s.impact_rm_monthly)}/month" if s.impact_rm_monthly > 0 else "Expected saving: —"
+    co2_kg = round(max(s.impact_kwh_monthly, 0.0) * GRID_EMISSION_KG_PER_KWH, 2)
     return Card(
         archetype_id=s.archetype_id,
         archetype_key=s.archetype_key,
@@ -248,6 +249,8 @@ def _build(s: Situation, headline: str, impact: str, action: str, math: list[str
         why_lines=_why_lines(s),
         math_lines=math,
         impact_rm_monthly=s.impact_rm_monthly,
+        impact_kwh_monthly=round(s.impact_kwh_monthly, 2),
+        impact_co2_kg_monthly=co2_kg,
         confidence=s.confidence,
     )
 

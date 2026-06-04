@@ -39,6 +39,14 @@ String _carbonLabel(double rmMonthly) {
   return '${kg.toStringAsFixed(1)} kg';
 }
 
+// Prefer the backend's kWh-based CO2 (authoritative; 0 for load-shift/tariff
+// cards). Fall back to the RM-derived estimate only for the offline catalog.
+String _cardCarbonLabel(CoachCardData data) {
+  final co2 = data.co2KgMonthly;
+  if (co2 != null) return '${co2.toStringAsFixed(1)} kg';
+  return _carbonLabel(data.rmMonthly);
+}
+
 class CoachCardData {
   const CoachCardData({
     required this.id,
@@ -56,6 +64,7 @@ class CoachCardData {
     required this.math,
     this.dataSource = 'showcase',
     this.pushEligible = false,
+    this.co2KgMonthly,
   });
 
   final int id;
@@ -73,6 +82,9 @@ class CoachCardData {
   final List<String> math;
   final String dataSource; // 'live' | 'replay' | 'showcase'
   final bool pushEligible; // earns a WhatsApp push (subset of 4 archetypes)
+  // CO2 avoided/month (kg), computed by the backend from kWh *reduced* (null for
+  // the offline static catalog -> falls back to the RM-derived estimate).
+  final double? co2KgMonthly;
 }
 
 class CoachCardState {
@@ -547,6 +559,7 @@ class _HomeShellState extends State<HomeShell> {
         onRefresh: _refreshBackendData,
         onTurnOff: _turnOffAc,
         onOpenCoach: _openCoachCard,
+        api: _api,
       ),
       CoachPage(
         cards: _cards,
@@ -653,6 +666,157 @@ class _DashAppliance {
   double costMonth;
 }
 
+/// In-app "Set Smart Rule" control for the AC. Reads/writes the backend rule
+/// (GET/POST /api/ac/rule) that pi_bridge enforces: if the AC runs while the
+/// room is empty past the threshold, either remind the user or auto-cut the AC.
+class AcSmartRuleControl extends StatefulWidget {
+  const AcSmartRuleControl({
+    super.key,
+    required this.api,
+    required this.backendOnline,
+  });
+
+  final WattsEyeApi api;
+  final bool backendOnline;
+
+  @override
+  State<AcSmartRuleControl> createState() => _AcSmartRuleControlState();
+}
+
+class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
+  AcRule _rule = const AcRule(enabled: true, emptyMinutes: 15, mode: 'auto_off');
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!widget.backendOnline) {
+      if (mounted) setState(() => _loaded = true);
+      return;
+    }
+    try {
+      final rule = await widget.api.getAcRule();
+      if (!mounted) return;
+      setState(() {
+        _rule = rule;
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _save(AcRule next) async {
+    setState(() => _rule = next); // optimistic
+    try {
+      final stored = await widget.api.setAcRule(next);
+      if (!mounted) return;
+      setState(() => _rule = stored); // adopt clamped values
+    } catch (_) {
+      // Offline: keep the optimistic value; the control is disabled anyway.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final editable = _loaded && widget.backendOnline;
+    final minutes = _rule.emptyMinutes.round();
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.rule_folder_outlined,
+                size: 18,
+                color: AppTheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Smart rule', style: theme.textTheme.titleSmall),
+              ),
+              Switch(
+                value: _rule.enabled,
+                onChanged: editable
+                    ? (v) => _save(_rule.copyWith(enabled: v))
+                    : null,
+              ),
+            ],
+          ),
+          Text(
+            !widget.backendOnline
+                ? 'Start the backend to change this rule.'
+                : _rule.enabled
+                ? 'If AC runs while the room is empty for $minutes min, '
+                      '${_rule.mode == 'auto_off' ? 'auto-turn it off.' : 'remind me.'}'
+                : 'Off — WattsEye won’t act on an empty-room AC automatically.',
+            style: theme.textTheme.bodySmall,
+          ),
+          if (_rule.enabled) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('Remind'),
+                  selected: _rule.mode == 'remind',
+                  onSelected: editable
+                      ? (_) => _save(_rule.copyWith(mode: 'remind'))
+                      : null,
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('Auto-off'),
+                  selected: _rule.mode == 'auto_off',
+                  onSelected: editable
+                      ? (_) => _save(_rule.copyWith(mode: 'auto_off'))
+                      : null,
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Text('Empty for', style: theme.textTheme.bodySmall),
+                const Spacer(),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: editable && minutes > 10
+                      ? () => _save(
+                          _rule.copyWith(emptyMinutes: _rule.emptyMinutes - 5),
+                        )
+                      : null,
+                  icon: const Icon(Icons.remove_circle_outline, size: 20),
+                ),
+                Text('$minutes min', style: theme.textTheme.titleSmall),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: editable && minutes < 60
+                      ? () => _save(
+                          _rule.copyWith(emptyMinutes: _rule.emptyMinutes + 5),
+                        )
+                      : null,
+                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class DashboardPage extends StatefulWidget {
   const DashboardPage({
     super.key,
@@ -662,6 +826,7 @@ class DashboardPage extends StatefulWidget {
     required this.onRefresh,
     required this.onTurnOff,
     required this.onOpenCoach,
+    required this.api,
   });
 
   final DashboardSnapshot? dashboard;
@@ -670,6 +835,7 @@ class DashboardPage extends StatefulWidget {
   final Future<void> Function() onRefresh;
   final Future<void> Function() onTurnOff;
   final ValueChanged<String> onOpenCoach;
+  final WattsEyeApi api;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -1052,6 +1218,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                   ),
                 ],
+                AcSmartRuleControl(
+                  api: widget.api,
+                  backendOnline: widget.backendOnline,
+                ),
               ],
             ),
           ),
@@ -2615,7 +2785,7 @@ class _HistoryPageState extends State<HistoryPage> {
                 ),
                 BillLine(
                   'Fridge',
-                  'Estimated - health watch active',
+                  'Estimated via NILM',
                   '~RM18.70',
                 ),
                 BillLine('Kettle', 'Estimated - normal routine', '~RM4.70'),
@@ -3231,7 +3401,7 @@ class RecommendationCard extends StatelessWidget {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              '${_carbonLabel(data.rmMonthly)} CO₂',
+                              '${_cardCarbonLabel(data)} CO₂',
                               style: const TextStyle(
                                 fontSize: 14,
                                 color: AppTheme.muted,
@@ -3870,6 +4040,9 @@ CoachCardState _coachCardFromApi(Map<String, dynamic> json) {
       math: _jsonStringList(json['math_lines']),
       dataSource: json['data_source']?.toString() ?? 'showcase',
       pushEligible: json['push_eligible'] == true,
+      co2KgMonthly: json.containsKey('impact_co2_kg_monthly')
+          ? _jsonDouble(json['impact_co2_kg_monthly'])
+          : null,
     ),
   );
 }

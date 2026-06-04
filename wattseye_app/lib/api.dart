@@ -127,6 +127,25 @@ class WattsEyeApi {
     return AcCutoffResult.fromJson(_decodeMap(response.body));
   }
 
+  /// Fetch the current AC smart rule (empty-room auto-off / remind).
+  Future<AcRule> getAcRule() async {
+    final response = await _get('/api/ac/rule');
+    final map = _decodeMap(response.body);
+    return AcRule.fromJson(Map<String, dynamic>.from(map['rule'] as Map? ?? map));
+  }
+
+  /// Persist the AC smart rule. The backend clamps out-of-range values.
+  Future<AcRule> setAcRule(AcRule rule) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/ac/rule'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(rule.toJson()),
+    );
+    _check(response);
+    final map = _decodeMap(response.body);
+    return AcRule.fromJson(Map<String, dynamic>.from(map['rule'] as Map? ?? map));
+  }
+
   Future<WhatsAppSendResult> sendWhatsAppAlert(String archetypeKey) async {
     final response = await _client.post(
       Uri.parse('$baseUrl/api/whatsapp/send'),
@@ -299,6 +318,44 @@ class HistoryDay {
     return HistoryDay(
       date: json['date']?.toString() ?? '',
       costRm: _number(json['cost_rm']),
+    );
+  }
+}
+
+/// The user-configurable AC smart rule: if the AC is running and the room is
+/// empty for [emptyMinutes], either remind the user or auto-cut the AC.
+class AcRule {
+  const AcRule({
+    required this.enabled,
+    required this.emptyMinutes,
+    required this.mode, // 'remind' | 'auto_off'
+  });
+
+  final bool enabled;
+  final double emptyMinutes;
+  final String mode;
+
+  AcRule copyWith({bool? enabled, double? emptyMinutes, String? mode}) {
+    return AcRule(
+      enabled: enabled ?? this.enabled,
+      emptyMinutes: emptyMinutes ?? this.emptyMinutes,
+      mode: mode ?? this.mode,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'empty_minutes': emptyMinutes,
+    'mode': mode,
+  };
+
+  factory AcRule.fromJson(Map<String, dynamic> json) {
+    return AcRule(
+      enabled: json['enabled'] == true,
+      emptyMinutes: _number(json['empty_minutes']) == 0
+          ? 15
+          : _number(json['empty_minutes']),
+      mode: json['mode']?.toString() ?? 'auto_off',
     );
   }
 }

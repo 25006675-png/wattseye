@@ -60,19 +60,51 @@ except ImportError:  # direct: python ML/sensing/ads1115_reader.py
 
 POWER_TOPIC = "wattseye/power"
 
+
+def _load_dotenv() -> None:
+    """Load the repo-root .env into os.environ (no python-dotenv dependency).
+
+    Lets the Pi's hardware calibration live in .env alongside the other secrets,
+    so tuning against real clamps never means editing this tracked file. Existing
+    env vars win, so a shell/systemd override still takes precedence.
+    """
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_dotenv()
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
 # SCT-013 30A/1V: 30 A of primary current per 1 V at the jack (burden resistor
 # is built in — see HARDWARE_CONNECTION.md §6.1, do NOT add an external one).
-AMPS_PER_VOLT = 30.0
+AMPS_PER_VOLT = _env_float("WATTSEYE_AMPS_PER_VOLT", 30.0)
 
 # ZMPT101B is trimpot-tuned (§7.3) so its OUT swings within 0-3.3 V. This maps
-# 1 V at OUT to real mains volts; refine during calibration (§16).
-VOLTS_PER_VOLT = 240.0  # placeholder — set during voltage calibration
+# 1 V at OUT to real mains volts; set WATTSEYE_VOLTS_PER_VOLT during calibration.
+VOLTS_PER_VOLT = _env_float("WATTSEYE_VOLTS_PER_VOLT", 240.0)
 
-# Calibrate once against a known kettle (§16). 1.00 == no correction.
+# Per-clamp fine trim against a known load (§16). 1.00 == no correction. Override
+# via WATTSEYE_CAL_* in .env once you've measured the error vs a reference meter.
 CALIBRATION = CalibrationConstants(
-    voltage_scale=1.00,
-    main_current_scale=1.00,
-    ac_current_scale=1.00,
+    voltage_scale=_env_float("WATTSEYE_CAL_VOLTAGE_SCALE", 1.00),
+    main_current_scale=_env_float("WATTSEYE_CAL_MAIN_SCALE", 1.00),
+    ac_current_scale=_env_float("WATTSEYE_CAL_AC_SCALE", 1.00),
 )
 
 # The branch on clamp #2 is the dedicated AC; PF-correct it as an inverter AC.
@@ -96,9 +128,11 @@ def _read_hardware_window(duration_s: float = 1.0):
     i2c = busio.I2C(board.SCL, board.SDA)
     ads = ADS.ADS1115(i2c, address=0x48)
     ads.data_rate = 860  # fastest; nets ~250 SPS/channel after the mux
-    a_main = AnalogIn(ads, ADS.P0)
-    a_volt = AnalogIn(ads, ADS.P1)
-    a_ac = AnalogIn(ads, ADS.P2)
+    # P0..P3 are single-ended channel indices (0..3). Some adafruit_ads1x15
+    # versions don't expose them as ADS.P* attributes, so fall back to the int.
+    a_main = AnalogIn(ads, getattr(ADS, "P0", 0))
+    a_volt = AnalogIn(ads, getattr(ADS, "P1", 1))
+    a_ac = AnalogIn(ads, getattr(ADS, "P2", 2))
 
     v_buf, i_main_buf, i_ac_buf = [], [], []
     t_end = time.time() + duration_s

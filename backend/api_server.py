@@ -239,11 +239,18 @@ def _select_coach_snapshot(mode: str):
     """
     if mode != "live":
         return _demo_snapshot(), "showcase"
-    from backend.snapshot_builder import from_history, from_live_state
+    from backend.snapshot_builder import (
+        IAWE_COORDS, IAWE_HISTORY_DB, from_history, from_live_state,
+    )
 
     snap = from_live_state()
     if snap is not None:
         return snap, "live"
+    # Real sub-metered home (iAWE) is the primary replay source; fall back to the
+    # synthetic Malaysian fixture, then to the demo literal so the tab never empties.
+    snap = from_history(IAWE_HISTORY_DB, lat=IAWE_COORDS[0], lon=IAWE_COORDS[1])
+    if snap is not None:
+        return snap, "replay"
     snap = from_history()
     if snap is not None:
         return snap, "replay"
@@ -449,6 +456,25 @@ def ac_cutoff_payload(body: dict[str, Any]) -> dict[str, Any]:
     return {"sent": True, "topic": "wattseye/ac/command", "command": command}
 
 
+def ac_rule_get_payload() -> dict[str, Any]:
+    """Current AC smart rule (enabled / empty_minutes / mode)."""
+    from backend import smart_rules
+
+    return {"ok": True, "rule": smart_rules.load_rule()}
+
+
+def ac_rule_set_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Persist the AC smart rule. Values are clamped/validated, not rejected.
+
+    The persisted rule is what pi_bridge reads each tick to decide whether an
+    empty-room AC episode should auto-cut or just remind.
+    """
+    from backend import smart_rules
+
+    stored = smart_rules.save_rule(body or {})
+    return {"ok": True, "rule": stored}
+
+
 APPLIANCE_LABELS_PATH = ROOT / "backend" / "_appliance_labels.json"
 
 
@@ -518,6 +544,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
         elif path == "/api/whatsapp/status":
             self._send_json(whatsapp_status_payload())
+        elif path == "/api/ac/rule":
+            self._send_json(ac_rule_get_payload())
         elif path == "/api/bill":
             self._send_json(bill_payload())
         elif path == "/api/history":
@@ -548,6 +576,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/ac/cutoff":
                 self._send_json(ac_cutoff_payload(self._read_json()))
+                return
+            if path == "/api/ac/rule":
+                self._send_json(ac_rule_set_payload(self._read_json()))
                 return
             if path == "/api/appliance/label":
                 self._send_json(appliance_label_payload(self._read_json()))
