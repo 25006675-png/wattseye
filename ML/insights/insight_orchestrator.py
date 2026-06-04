@@ -7,12 +7,10 @@ from pathlib import Path
 
 try:
     from .cost_engine import analyze_cost
-    from .health_engine import analyze_health
     from .models import ApplianceEvent, EngineResult, priority_rank
     from .occupancy_engine import analyze_occupancy
 except ImportError:  # Allows direct script execution: python ML/insights/insight_orchestrator.py
     from cost_engine import analyze_cost
-    from health_engine import analyze_health
     from models import ApplianceEvent, EngineResult, priority_rank
     from occupancy_engine import analyze_occupancy
 
@@ -25,11 +23,6 @@ try:
     from anomaly.isolation_forest import anomaly_score as _if_score
 except Exception:
     _if_score = None
-
-try:
-    from anomaly.appliance_health_regression import health_check as _fridge_health
-except Exception:
-    _fridge_health = None
 
 try:
     from routine.kmeans_phases import classify as _classify_phase
@@ -72,34 +65,6 @@ def analyze_anomaly(event: ApplianceEvent) -> EngineResult:
             f"{event.appliance} event signature is {'unusual' if is_anom else 'consistent'} "
             f"compared with learned baseline (IF score {result['score']:.2f})."
         ] if is_anom else [],
-        metrics=result,
-    )
-
-
-def analyze_fridge_drift(event: ApplianceEvent, fridge_duty_cycle: float | None) -> EngineResult:
-    if event.appliance != "fridge" or _fridge_health is None or fridge_duty_cycle is None:
-        return EngineResult(
-            engine="fridge_health", status="not_applicable", priority="low",
-            reasons=[], metrics={},
-        )
-    result = _fridge_health(
-        actual_duty_cycle=fridge_duty_cycle,
-        hour=event.timestamp.hour,
-        day_of_week=event.timestamp.weekday(),
-        month=event.timestamp.month,
-    )
-    reasons = []
-    if result["flagged"]:
-        reasons.append(
-            f"Fridge duty cycle is {result['drift_percent']:+.0f}% off the learned baseline "
-            f"for this hour (z={result['z_score']:+.1f} sigma; "
-            f"actual {result['actual']:.2f} vs expected {result['predicted']:.2f})."
-        )
-    return EngineResult(
-        engine="fridge_health",
-        status=result["status"],
-        priority=result["priority"],
-        reasons=reasons,
         metrics=result,
     )
 
@@ -204,8 +169,6 @@ def choose_title(event: ApplianceEvent, results: list[EngineResult]) -> str:
     statuses = {result.status for result in results}
     if "empty_room_waste" in statuses:
         return f"{event.appliance.upper()} running in an empty room"
-    if "health_warning" in statuses or any(result.engine == "health" and result.status == "watch" for result in results):
-        return f"{event.appliance.replace('_', ' ').title()} health watch"
     if any(result.engine == "cost" and result.status == "costly" for result in results):
         return f"{event.appliance.replace('_', ' ').title()} cost is trending high"
     if any(result.engine == "routine" and result.status == "unusual" for result in results):
@@ -217,8 +180,6 @@ def choose_action(event: ApplianceEvent, results: list[EngineResult]) -> str:
     statuses = {result.status for result in results}
     if "empty_room_waste" in statuses:
         return "Turn it off or enable auto-off control if nobody is using the room."
-    if "health_warning" in statuses or any(result.engine == "health" and result.status == "watch" for result in results):
-        return "Check whether this pattern continues before treating it as a fault."
     if any(result.engine == "routine" and result.status in {"unusual", "watch"} for result in results):
         return "Mark as normal if this usage is intentional."
     return "No action needed."
@@ -229,10 +190,8 @@ def orchestrate_insight(
     history_path: Path = DEFAULT_HISTORY,
     projected_monthly_kwh: float = 350.0,
     afa_sen_per_kwh: float = 0.0,
-    fridge_duty_cycle: float | None = None,
 ) -> dict[str, object]:
     routine_result = load_routine_result(event, history_path)
-    baseline = routine_result.metrics.get("baseline")
     results = [
         routine_result,
         analyze_cost(
@@ -241,9 +200,7 @@ def orchestrate_insight(
             afa_sen_per_kwh=afa_sen_per_kwh,
         ),
         analyze_occupancy(event),
-        analyze_health(event, baseline if isinstance(baseline, dict) else None),
         analyze_anomaly(event),
-        analyze_fridge_drift(event, fridge_duty_cycle),
         analyze_phase(event),
         analyze_signature(event),
     ]
@@ -317,12 +274,6 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Current TNB AFA surcharge/rebate. Update from tnb.com.my monthly.",
     )
-    parser.add_argument(
-        "--fridge-duty-cycle",
-        type=float,
-        default=None,
-        help="Optional: fridge duty cycle this hour (0-1) for health regression.",
-    )
     return parser.parse_args()
 
 
@@ -344,7 +295,6 @@ def main() -> None:
                 args.history,
                 projected_monthly_kwh=args.projected_monthly_kwh,
                 afa_sen_per_kwh=args.afa_sen_per_kwh,
-                fridge_duty_cycle=args.fridge_duty_cycle,
             ),
             indent=2,
         )

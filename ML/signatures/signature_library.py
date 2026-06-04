@@ -1,21 +1,36 @@
 """Signature library for user-labeled appliances beyond the NILM model set.
 
-When the residual power channel (everything except AC and the 5 NILM-modeled
-appliances) shows a power-on event, this module:
+Event detection here is **edge-based (Hart-style)**, not absolute-level. The
+residual channel (everything except AC and the 5 NILM-modeled appliances) is
+almost never zero in a real home — it is a *superposition* of TV + router +
+chargers + standby. A level threshold ("residual > 60 W") would smear all of
+that into one meaningless hours-long blob. Instead we key off the **step change
+(ΔW)** at a switch-on: when one appliance turns on, total residual jumps by
+~its own draw, regardless of what else is already running. We pair each up-edge
+with the matching down-edge to recover that one appliance's activation.
 
-1. Extracts a feature vector — peak_w, mean_w, duration_min, hour_of_day, dayofweek.
+Per detected edge-event this module:
+
+1. Builds a feature vector from the **step magnitude** (the appliance's own draw,
+   isolated from background) + duration + hour-of-day + day-of-week.
 2. Looks for a match in the household's signature library (SQLite store).
-3. If a match is found within tolerance, returns the user's label
-   (e.g. "rice cooker", "TV").
+3. If a match is found within tolerance, returns the user's label ("rice cooker", "TV").
 4. If no match, returns "unknown" and offers the event for user labelling.
 
 After the user confirms a label once via the UI, that signature becomes a
-first-class appliance for routine, history, anomaly, and bill calculation —
-the same way NILM appliances are. The library grows as the user labels.
+first-class appliance for routine, history, anomaly, and bill calculation.
 
-This is intentionally NOT a trained ML model. It is a small few-shot matcher
-using simple Euclidean distance in feature space. New appliances can be added
-in one tap, which is the whole point of the architecture.
+HONEST SCOPE — read before pitching this:
+  Edge matching reliably handles appliances that turn on as a **clean, isolated,
+  distinctive step** (rice cooker at dinner, water heater at 2 AM). It does NOT
+  decompose a tangled always-on cluster, simultaneous turn-ons (same-second
+  edges merge), variable loads (no clean step), or count identical units. The
+  load-bearing claim for the unknown bucket is **completeness** ("every watt is
+  measured even when unlabeled, and priced as a named aggregate"), with one-tap
+  labeling as a bonus for the easy case — not general residual disaggregation.
+  See plan/08 §3b.
+
+This is intentionally NOT a trained ML model — a small few-shot Euclidean matcher.
 """
 
 from __future__ import annotations
@@ -31,8 +46,10 @@ from typing import Iterable
 DEFAULT_LIB = Path(__file__).resolve().parent / "signature_library.sqlite"
 DEFAULT_HISTORY_DB = Path(__file__).resolve().parents[1] / "sensing" / "synthetic_history.sqlite"
 
-UNKNOWN_ON_THRESHOLD_W = 60   # residual events below this are noise
-MIN_EVENT_DURATION_MIN = 2
+STEP_ON_W = 50                # min power *rise* between samples to register a switch-on edge
+STEP_MATCH_TOL = 0.35         # an off-edge pairs with an open on-edge if magnitudes match within ±35%
+MIN_EVENT_DURATION_MIN = 2    # ignore activations shorter than this
+MAX_EVENT_DURATION_MIN = 12 * 60  # drop on-edges that never see a matching off-edge
 MATCH_DISTANCE_THRESHOLD = 0.40  # Euclidean distance in normalised feature space
 
 
@@ -130,13 +147,23 @@ def confirm_signature(sig_id: int, lib_path: Path = DEFAULT_LIB) -> None:
 def detect_unknown_events(history_db: Path = DEFAULT_HISTORY_DB,
                           start: datetime | None = None,
                           end: datetime | None = None) -> list[tuple[datetime, EventFeatures]]:
-    """Scan the *effective* residual signal — what the live system would see
-    after subtracting AC (dedicated clamp) and the 5 NILM-modeled appliances.
+    """Edge-detect appliance activations on the *effective* residual signal — what
+    the live system sees after subtracting AC (dedicated clamp) and the 5
+    NILM-modeled appliances.
 
-    In the synthetic data, rice_cooker_w, tv_w, microwave_w, computer_w, fan_w
-    are stored as separate ground-truth columns for evaluation, but in production
-    they would all be lumped into the residual because there is no NILM model
-    for them yet. We reconstruct that production view here.
+    Algorithm (Hart-style edge matching, see module docstring):
+      * Walk consecutive samples and look at the step ΔW = w[t] - w[t-1].
+      * ΔW >= STEP_ON_W  -> a switch-ON edge (an appliance drawing ~ΔW turned on).
+      * ΔW <= -STEP_ON_W -> a switch-OFF edge; pair it with the most recent open
+        on-edge whose magnitude matches within STEP_MATCH_TOL.
+      * On a pair, emit one event whose peak_w is the *step magnitude* — the
+        appliance's own draw isolated from whatever background was already on.
+    This recovers a single appliance's turn-on even when the residual never drops
+    to zero, which a level threshold could not.
+
+    In the synthetic data, rice_cooker_w/tv_w/microwave_w/computer_w/fan_w are
+    stored as separate ground-truth columns; in production they all fold into the
+    residual (no NILM model for them). We reconstruct that production view here.
     """
     conn = sqlite3.connect(history_db)
     q = (
@@ -152,40 +179,42 @@ def detect_unknown_events(history_db: Path = DEFAULT_HISTORY_DB,
     rows = conn.execute(q, params).fetchall()
     conn.close()
 
+    samples = [(datetime.fromisoformat(ts_str), float(w)) for ts_str, w in rows]
     events: list[tuple[datetime, EventFeatures]] = []
-    active = False
-    start_ts: datetime | None = None
-    peak = 0.0
-    total = 0.0
-    count = 0
-    for ts_str, w in rows:
-        ts = datetime.fromisoformat(ts_str)
-        w = float(w)
-        if w >= UNKNOWN_ON_THRESHOLD_W:
-            if not active:
-                active = True
-                start_ts = ts
-                peak = w
-                total = w
-                count = 1
-            else:
-                peak = max(peak, w)
-                total += w
-                count += 1
-        elif active:
-            assert start_ts is not None
-            duration = (ts - start_ts).total_seconds() / 60
-            if duration >= MIN_EVENT_DURATION_MIN:
-                features = EventFeatures(
-                    peak_w=peak,
-                    mean_w=total / count if count else 0,
-                    duration_min=duration,
-                    hour_of_day=start_ts.hour,
-                    day_of_week=start_ts.weekday(),
-                )
-                events.append((start_ts, features))
-            active = False
-            start_ts = None
+    open_edges: list[dict] = []  # appliances currently on: {on_ts, step}
+    prev_w: float | None = None
+
+    for ts, w in samples:
+        if prev_w is None:
+            prev_w = w
+            continue
+        delta = w - prev_w
+
+        if delta >= STEP_ON_W:
+            open_edges.append({"on_ts": ts, "step": delta})
+        elif delta <= -STEP_ON_W and open_edges:
+            off_mag = -delta
+            # pair with the open on-edge whose magnitude is the closest relative match
+            best_i, best_diff = None, None
+            for i, edge in enumerate(open_edges):
+                diff = abs(edge["step"] - off_mag) / max(edge["step"], 1.0)
+                if diff <= STEP_MATCH_TOL and (best_diff is None or diff < best_diff):
+                    best_i, best_diff = i, diff
+            if best_i is not None:
+                edge = open_edges.pop(best_i)
+                duration = (ts - edge["on_ts"]).total_seconds() / 60
+                if MIN_EVENT_DURATION_MIN <= duration <= MAX_EVENT_DURATION_MIN:
+                    magnitude = (edge["step"] + off_mag) / 2  # appliance's own draw
+                    events.append((edge["on_ts"], EventFeatures(
+                        peak_w=magnitude,
+                        mean_w=magnitude,
+                        duration_min=duration,
+                        hour_of_day=edge["on_ts"].hour,
+                        day_of_week=edge["on_ts"].weekday(),
+                    )))
+        prev_w = w
+
+    events.sort(key=lambda item: item[0])
     return events
 
 

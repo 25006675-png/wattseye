@@ -155,18 +155,30 @@ The model looks at a window of past power readings and predicts the appliance po
 A Transformer's attention layers learn which moments in the window matter most for each appliance.
 ```
 
-Architecture details for the shipped checkpoints (`ML/NILM/*.pth`):
+Architecture details for the shipped checkpoints (`ML/NILM/*.pth`) — these are the
+**actual trained config**, verified against the checkpoints (see
+`ML/NILM/eval/RESULTS.md` and `ML/NILM/electricity_model.py`):
 
 ```text
-Input window:     240 samples (≈ 240 seconds at 1 Hz)
-Front conv:       1 → 64 channels, kernel 5
+Input window:     480 samples, stride 240 (data resampled to a 6 s grid)
+Token downsample: Conv1d(1 → hidden, kernel 5) + LPPool1d(k2, s2)  → 240 tokens
 Position encoding: learned, length 240
-Transformer:      2 blocks, 8 heads, d_model = 64, d_ff = 256
-Head:             ConvTranspose1d + mean pool + Linear(64→128) + Linear(128→1)
-Trained as:       Generator half of a GAN-style training loop (Discriminator weights also live in the .pth but are not used at inference)
+Transformer:      2 blocks, 2 heads, GELU FFN, post-norm sublayers
+                  Discriminator hidden = 256  (the inference network)
+                  Generator     hidden = 64   (masked pre-training only)
+Output:           ConvTranspose1d upsample + tanh + Linear(→128) + Linear(→1), seq2seq
+Inference output: the **Discriminator** (NOT the Generator) — at test time the
+                  ELECTRIcity forward returns the Discriminator's disaggregation.
 ```
 
-Why ELECTRIcity instead of vanilla seq2point CNN: published results show better F1/MAE on UK-DALE and REFIT for the same appliance set, and the attention layers extract enough long-range structure that a shorter 240-sample window suffices. Trade-off: it is heavier than a CNN, so Pi-side inference speed must be benchmarked before claiming live multi-appliance inference. See §15-16 below for the runtime story.
+> Correction: an earlier draft of this section listed `240`-window / `8`-head /
+> `d_model=64` / "Generator is the inference half." That described the
+> approximate reconstruction in `ML/NILM/test_nilm_inference.py`, not the trained
+> model. The trained disaggregator is the Discriminator (hidden 256); the
+> Generator is used only during pre-training. `electricity_model.py` is the
+> faithful definition and loads the shipped weights with `strict=True`.
+
+Why ELECTRIcity instead of vanilla seq2point CNN: published results show better F1/MAE on UK-DALE and REFIT for the same appliance set, and the attention layers extract enough long-range structure to disaggregate from the aggregate feeder. Trade-off: it is heavier than a CNN, so Pi-side inference speed must be benchmarked before claiming live multi-appliance inference. See §15-16 below for the runtime story.
 
 ## 10. Why one model per appliance?
 
@@ -499,13 +511,34 @@ ML signals are useless until they become a specific, quantified action. The Coac
 (`ML/insights/coach/`) is the layer that does that. It runs a five-step pipeline:
 
 ```text
-HomeSnapshot
-  → correlator   (join NILM + Occupancy + K-Means + Routine + IF into named Situations)
+HomeSnapshot  (← feedback_loader fills dismiss/show history from disk logs)
+  → correlator   (join NILM + Dedicated AC clamp + Occupancy + K-Means + Routine + IF into named Situations)
   → quantifier   (attach RM impact via tnb_tariff.marginal_cost_rm + joint confidence)
   → templates    (deterministic card text — no LLM on the load-bearing path)
   → ranker       (score = √impact × confidence × novelty × dismiss_decay × severity)
   → list[Card]   (top 2 surfaced, rest secondary)
+       ↑                                                                  │
+       │   WhatsApp reply → whatsapp_webhook.record_user_action() ────────┤
+       └── In-app tap     → api_server POST .../action → same record_user_action()
+                           both write _user_actions.json (dismiss/accept/snooze)
 ```
+
+The loop is closed live across **both channels**, not just designed:
+
+- `whatsapp_webhook.py` writes user replies to `_user_actions.json`.
+- `backend/api_server.py` POST `/api/coach/cards/{key}/action` writes in-app
+  taps to the same log via `record_user_action()` — so the 8 archetypes that
+  never push to WhatsApp still feed the loop when dismissed in the Flutter app.
+- `feedback_loader.py` reads that log plus `_whatsapp_sent.json` into
+  `HomeSnapshot.dismissed_archetypes` and `recently_shown` on every
+  `generate_cards()` call, so the ranker's dismiss_decay (7-day full
+  suppression, linear ramp back) and novelty (3-day repeat cooldown) terms
+  actually fire.
+
+Source-attribution rule in `correlator._power_source_label()`: any evidence
+line about AC power names the **Dedicated CT clamp**, not NILM. Other
+appliances stay attributed to NILM. This keeps the card's "Why this appeared"
+consistent with Pillar 1's two-clamp architecture promise.
 
 The system ships **12 recommendation archetypes** organised into 5 families:
 

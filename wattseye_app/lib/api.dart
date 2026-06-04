@@ -22,8 +22,8 @@ class WattsEyeApi {
     return DashboardSnapshot.fromJson(_decodeMap(response.body));
   }
 
-  Future<List<Map<String, dynamic>>> getCoachCards() async {
-    final response = await _get('/api/coach/cards');
+  Future<List<Map<String, dynamic>>> getCoachCards({String mode = 'showcase'}) async {
+    final response = await _get('/api/coach/cards?mode=$mode');
     final data = jsonDecode(response.body);
     if (data is! List) {
       throw const FormatException('Expected a list of coach cards');
@@ -46,6 +46,104 @@ class WattsEyeApi {
       body: jsonEncode({'action': action}),
     );
     _check(response);
+  }
+
+  /// Schedule a WhatsApp reminder for a coach card, [fireInSeconds] from now.
+  Future<void> createReminder(
+    String archetypeKey,
+    int fireInSeconds, {
+    String headline = '',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/reminders'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'archetype_key': archetypeKey,
+        'fire_in_seconds': fireInSeconds,
+        'headline': headline,
+      }),
+    );
+    _check(response);
+  }
+
+  Future<BillInfo> getBill() async {
+    final response = await _get('/api/bill');
+    return BillInfo.fromJson(_decodeMap(response.body));
+  }
+
+  /// Recompute the forecast for a chosen set of lever keys. The server composes
+  /// through the tariff engine (handles cliff/EEI band crossings), so the total
+  /// is correct for combinations, not a flat per-card sum.
+  Future<ForecastSim> simulateForecast(
+    List<String> selected, {
+    String mode = 'showcase',
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/forecast/simulate'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'mode': mode, 'selected': selected}),
+    );
+    _check(response);
+    return ForecastSim.fromJson(_decodeMap(response.body));
+  }
+
+  /// Persist a user label/correction for an appliance signature so future
+  /// detections can match it. [kind] is 'device' | 'multiple' | 'unsure'.
+  Future<void> labelAppliance({
+    required String appliance,
+    required String kind,
+    String? device,
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/appliance/label'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'appliance': appliance,
+        'kind': kind,
+        'device': ?device,
+      }),
+    );
+    _check(response);
+  }
+
+  Future<List<HistoryDay>> getHistory() async {
+    final response = await _get('/api/history');
+    final map = _decodeMap(response.body);
+    final days = map['days'];
+    if (days is! List) return const [];
+    return [
+      for (final d in days)
+        if (d is Map) HistoryDay.fromJson(Map<String, dynamic>.from(d)),
+    ];
+  }
+
+  Future<AcCutoffResult> triggerAcCutoff() async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/ac/cutoff'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'reason': 'app_manual'}),
+    );
+    _check(response);
+    return AcCutoffResult.fromJson(_decodeMap(response.body));
+  }
+
+  /// Fetch the current AC smart rule (empty-room auto-off / remind).
+  Future<AcRule> getAcRule() async {
+    final response = await _get('/api/ac/rule');
+    final map = _decodeMap(response.body);
+    return AcRule.fromJson(Map<String, dynamic>.from(map['rule'] as Map? ?? map));
+  }
+
+  /// Persist the AC smart rule. The backend clamps out-of-range values.
+  Future<AcRule> setAcRule(AcRule rule) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/ac/rule'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode(rule.toJson()),
+    );
+    _check(response);
+    final map = _decodeMap(response.body);
+    return AcRule.fromJson(Map<String, dynamic>.from(map['rule'] as Map? ?? map));
   }
 
   Future<WhatsAppSendResult> sendWhatsAppAlert(String archetypeKey) async {
@@ -79,6 +177,200 @@ class WattsEyeApi {
       throw const FormatException('Expected a JSON object');
     }
     return Map<String, dynamic>.from(data);
+  }
+}
+
+class BillLineItem {
+  const BillLineItem({
+    required this.label,
+    required this.amountRm,
+    required this.unitDetail,
+  });
+
+  final String label;
+  final double amountRm;
+  final String unitDetail;
+
+  factory BillLineItem.fromJson(Map<String, dynamic> json) {
+    return BillLineItem(
+      label: json['label']?.toString() ?? '',
+      amountRm: _number(json['amount_rm']),
+      unitDetail: json['unit_detail']?.toString() ?? '',
+    );
+  }
+}
+
+/// One slice of the forecast cost attribution. `kind` is 'measured' (AC clamp,
+/// exact), 'estimated' (NILM-disaggregated), or 'unknown' (unattributed residual).
+class ApplianceCost {
+  const ApplianceCost({
+    required this.appliance,
+    required this.amountRm,
+    required this.kind,
+  });
+
+  final String appliance;
+  final double amountRm;
+  final String kind;
+
+  factory ApplianceCost.fromJson(Map<String, dynamic> json) {
+    return ApplianceCost(
+      appliance: json['appliance']?.toString() ?? '',
+      amountRm: _number(json['amount_rm']),
+      kind: json['kind']?.toString() ?? 'estimated',
+    );
+  }
+}
+
+/// Result of a backend forecast composition for a chosen lever set.
+class ForecastSim {
+  const ForecastSim({
+    required this.composedTotalRm,
+    required this.savingRm,
+    required this.newKwh,
+  });
+
+  final double composedTotalRm;
+  final double savingRm;
+  final double newKwh;
+
+  factory ForecastSim.fromJson(Map<String, dynamic> json) {
+    return ForecastSim(
+      composedTotalRm: _number(json['composed_total_rm']),
+      savingRm: _number(json['saving_rm']),
+      newKwh: _number(json['new_kwh']),
+    );
+  }
+}
+
+class BillInfo {
+  const BillInfo({
+    required this.projectedTotalRm,
+    required this.projectedKwh,
+    required this.effectiveSenPerKwh,
+    required this.touProjectedTotalRm,
+    this.baselineTotalRm = 0,
+    this.attribution = const [],
+    this.highBandThresholdKwh = 1500,
+    this.headroomKwh = 0,
+    this.inHighBand = false,
+    this.lowBandGenSen = 27.03,
+    this.highBandGenSen = 37.03,
+    this.lines = const [],
+  });
+
+  final double projectedTotalRm;
+  final double projectedKwh;
+  final double effectiveSenPerKwh;
+  final double touProjectedTotalRm;
+  final double baselineTotalRm;
+  final List<ApplianceCost> attribution;
+  final double highBandThresholdKwh;
+  final double headroomKwh;
+  final bool inHighBand;
+  final double lowBandGenSen;
+  final double highBandGenSen;
+  final List<BillLineItem> lines;
+
+  factory BillInfo.fromJson(Map<String, dynamic> json) {
+    final rawLines = json['lines'];
+    final rawAttribution = json['attribution'];
+    return BillInfo(
+      projectedTotalRm: _number(json['projected_total_rm']),
+      projectedKwh: _number(json['projected_kwh']),
+      effectiveSenPerKwh: _number(json['effective_sen_per_kwh']),
+      touProjectedTotalRm: _number(json['tou_projected_total_rm']),
+      baselineTotalRm: _number(json['baseline_total_rm']),
+      attribution: rawAttribution is List
+          ? rawAttribution
+                .whereType<Map>()
+                .map((m) => ApplianceCost.fromJson(Map<String, dynamic>.from(m)))
+                .toList()
+          : const [],
+      highBandThresholdKwh: json['high_band_threshold_kwh'] == null
+          ? 1500
+          : _number(json['high_band_threshold_kwh']),
+      headroomKwh: _number(json['headroom_kwh']),
+      inHighBand: json['in_high_band'] == true,
+      lowBandGenSen: json['low_band_gen_sen'] == null
+          ? 27.03
+          : _number(json['low_band_gen_sen']),
+      highBandGenSen: json['high_band_gen_sen'] == null
+          ? 37.03
+          : _number(json['high_band_gen_sen']),
+      lines: rawLines is List
+          ? rawLines
+                .whereType<Map>()
+                .map((m) => BillLineItem.fromJson(Map<String, dynamic>.from(m)))
+                .toList()
+          : const [],
+    );
+  }
+}
+
+class HistoryDay {
+  const HistoryDay({required this.date, required this.costRm});
+
+  final String date;
+  final double costRm;
+
+  factory HistoryDay.fromJson(Map<String, dynamic> json) {
+    return HistoryDay(
+      date: json['date']?.toString() ?? '',
+      costRm: _number(json['cost_rm']),
+    );
+  }
+}
+
+/// The user-configurable AC smart rule: if the AC is running and the room is
+/// empty for [emptyMinutes], either remind the user or auto-cut the AC.
+class AcRule {
+  const AcRule({
+    required this.enabled,
+    required this.emptyMinutes,
+    required this.mode, // 'remind' | 'auto_off'
+  });
+
+  final bool enabled;
+  final double emptyMinutes;
+  final String mode;
+
+  AcRule copyWith({bool? enabled, double? emptyMinutes, String? mode}) {
+    return AcRule(
+      enabled: enabled ?? this.enabled,
+      emptyMinutes: emptyMinutes ?? this.emptyMinutes,
+      mode: mode ?? this.mode,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'empty_minutes': emptyMinutes,
+    'mode': mode,
+  };
+
+  factory AcRule.fromJson(Map<String, dynamic> json) {
+    return AcRule(
+      enabled: json['enabled'] == true,
+      emptyMinutes: _number(json['empty_minutes']) == 0
+          ? 15
+          : _number(json['empty_minutes']),
+      mode: json['mode']?.toString() ?? 'auto_off',
+    );
+  }
+}
+
+class AcCutoffResult {
+  const AcCutoffResult({required this.sent, required this.reason});
+
+  final bool sent;
+  final String reason;
+
+  factory AcCutoffResult.fromJson(Map<String, dynamic> json) {
+    return AcCutoffResult(
+      sent: json['sent'] == true,
+      reason: json['reason']?.toString() ?? '',
+    );
   }
 }
 
@@ -176,12 +468,16 @@ class ActiveAppliance {
     required this.watts,
     required this.todayKwh,
     required this.todayRm,
+    this.kind = 'estimated',
+    this.monthCostRm = 0,
   });
 
   final String name;
   final double watts;
   final double todayKwh;
   final double todayRm;
+  final String kind; // 'measured' | 'estimated' | 'unknown'
+  final double monthCostRm;
 
   factory ActiveAppliance.fromJson(Map<String, dynamic> json) {
     return ActiveAppliance(
@@ -189,6 +485,8 @@ class ActiveAppliance {
       watts: _number(json['watts']),
       todayKwh: _number(json['today_kwh']),
       todayRm: _number(json['today_rm']),
+      kind: json['kind']?.toString() ?? 'estimated',
+      monthCostRm: _number(json['month_cost_rm']),
     );
   }
 }

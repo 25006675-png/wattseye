@@ -18,7 +18,6 @@ Output formats:
 This is the canonical training/demo data for the downstream ML models:
 - ML/routine/kmeans_phases.py
 - ML/anomaly/isolation_forest.py
-- ML/anomaly/appliance_health_regression.py
 - ML/signatures/signature_library.py
 """
 

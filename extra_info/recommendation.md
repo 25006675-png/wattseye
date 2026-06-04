@@ -355,3 +355,75 @@
   - Demo 6 cards: #1, 2, 4, 5, 7, 12 — covers behavioural, tariff, forecast, and capital, with the two strongest uniquely-Malaysian plays
   (4 and 5) front and centre.
   - Keep the other 6 archetypes on a roadmap slide so the surface area looks intentional, not absent.
+
+
+
+
+  Your instinct is exactly right, and it's a classic demo-engineering tension. Let me answer the literal question first,
+  then give you the professional take.
+
+  Does the coach logic already fire correctly? Yes.
+
+  The engine is sound and data-driven: snapshot in → score → surfaced flag → card out. Each archetype trips when its
+  conditions exist in the snapshot. The logic isn't the problem.
+
+  The problem is what the code itself admits at coach_engine.py:73:
+
+  ▎ _demo_snapshot() — "A synthetic snapshot that triggers most archetypes — for the mock UI."
+
+  That snapshot is deliberately overloaded to trip ~12 archetypes at once. No real home has an empty-room AC and a fridge
+  fault and a tariff-tier cliff and a month-long bill trend in the same minute. So the moment you feed it live data, you'll
+   realistically get 1–2 cards, and the rich 12-card wall disappears. You've understood the trade-off perfectly.
+
+  Professional advice: you're framing it as either/or — it's both, labeled
+
+  You're conflating two different claims that map to different judging criteria:
+
+  ┌────────────────────────────────────┬────────────────────────────────────────┬─────────────────────────────────────┐
+  │               Claim                │               Proven by                │         Don't prove it with         │
+  ├────────────────────────────────────┼────────────────────────────────────────┼─────────────────────────────────────┤
+  │ Breadth — "our engine handles 12   │ Replaying curated/historical data      │ Live hardware (can't manufacture 12 │
+  │ situations"                        │ through the engine                     │  faults on stage)                   │
+  ├────────────────────────────────────┼────────────────────────────────────────┼─────────────────────────────────────┤
+  │ Authenticity — "it really works on │ One genuinely live card from the clamp │ Mock data                           │
+  │  real hardware"                    │                                        │                                     │
+  └────────────────────────────────────┴────────────────────────────────────────┴─────────────────────────────────────┘
+
+  Senior verdict: do NOT replace demo with live. Run both as explicit modes. Your architecture already supports it for free
+   — the engine takes a snapshot, so feed it two sources:
+
+  1. Live mode → real clamp + occupancy → the one hero card fires for real (empty-room AC cutoff, your Pillar-2 moment).
+  2. Showcase/replay mode → feed the engine synthetic_history / curated snapshots so all 12 render. This is a replay
+  fixture, not "fake" — replaying recorded data through the real pipeline is standard practice in every serious data
+  product.
+
+  The three rules that separate amateur from professional here
+
+  1. Never blend silently. A judge who assumes all 12 are live and later realizes they're mock = you lose all credibility.
+  The same judge, told the distinction up front, respects it. You already have the "Demo data" vs "Live Pi" chip — extend
+  it per-card or per-section. Label ruthlessly.
+  2. The honest narrative actually wins points:
+  ▎ "You can't degrade a fridge or create a month-long bill trend in five minutes. So — this card is firing live, right
+  now, from the clamp [trigger the real cutoff]. These others are the same engine replaying a recorded week where those
+  conditions actually happened."
+
+  2. That framing demonstrates engineering maturity. Judges know the real-world constraint; acknowledging it reads as
+  senior, not as a weakness.
+  3. Make the one live card bulletproof. The credibility of the entire system rests on that single genuinely-live moment.
+  One reliable real card beats twelve mock ones. Rehearse the empty-room → IR → relay → A2-drops-to-zero → card-fires chain
+   until it's boringly repeatable. If the live moment flakes, the replay cards can't save you.
+
+  How this maps to what we just built
+
+  - The dashboard is already live-wired.
+  - For the hero card to be genuinely live, you'd want last turn's Option #2 (build_live_snapshot() feeding _coach_cards()
+  for the empty-room path).
+  - Keep _demo_snapshot() exactly as-is, but rename its role in your own head and UI from "the demo" to "Showcase / Replay
+  mode" — it's your breadth proof, not an embarrassment.
+
+  So: don't delete the 12-card mock. Promote it to an explicit, labeled "Showcase" mode, and put one real card next to it.
+  That's the architecture that's both impressive and honest.
+
+  Want me to implement that split — a --mode live|showcase (or an env flag) on the backend so /api/coach/cards can serve
+  either the live hero card or the full replay set, with each card tagged live vs replay so the app can label them? That's
+  the concrete version of this advice.

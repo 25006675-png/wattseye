@@ -28,6 +28,18 @@ BILL_TREND_MULTIPLIER = 1.15         # 15% over recent 3-month average
 COMPARATIVE_REGRESSION_MULTIPLIER = 1.20
 ROUTINE_SHIFT_MIN_MINUTES = 60
 TOU_SAVING_THRESHOLD_FRACTION = 0.6  # need >=60% off-peak to recommend ToU switch
+
+
+def _power_source_label(appliance: str | None) -> str:
+    """Evidence-source attribution for an appliance's power reading.
+
+    AC is measured by the dedicated CT clamp at the DB box (plan/00 §4); every
+    other appliance is inferred by NILM off the residual main signal. The card's
+    "Why this appeared" line must reflect this — judges read the source.
+    """
+    if appliance and appliance.startswith("ac"):
+        return "Dedicated CT clamp"
+    return "NILM"
 SIMULTANEOUS_MIN_LOADS = 2
 SIMULTANEOUS_MIN_TOTAL_W = 2500
 HOT_DAY_TEMP_C = 33.0
@@ -73,9 +85,11 @@ def detect_left_on_empty(snap: HomeSnapshot) -> list[Situation]:
         usual_hours = baseline.get("expected_on_hours", set())
         is_unusual = snap.timestamp.hour not in usual_hours if usual_hours else True
 
+        power_source = _power_source_label(appliance)
+        power_conf = 0.95 if power_source == "Dedicated CT clamp" else 0.85
         evidence = [
             Evidence("Occupancy", f"Room empty since {snap.occupancy_since.strftime('%H:%M')} ({int(minutes_empty)} min).", 0.9),
-            Evidence("NILM", f"{appliance.replace('_', ' ').title()} drawing {watts:.0f}W.", 0.85),
+            Evidence(power_source, f"{appliance.replace('_', ' ').title()} drawing {watts:.0f}W.", power_conf),
             Evidence("K-Means phase", f"Current phase: {snap.current_phase}.", 0.8),
         ]
         if usual_hours:
@@ -152,7 +166,7 @@ def detect_tou_switch(snap: HomeSnapshot) -> list[Situation]:
         return []
     evidence = [
         Evidence("Routine engine", f"{offpeak_frac*100:.0f}% of your last 30 days of usage fell in off-peak hours."),
-        Evidence("TNB tariff calc", "ToU off-peak rate is 17.55 sen/kWh lower than peak — savings depend on actual usage split."),
+        Evidence("TNB tariff calc", "ToU off-peak generation rate is 4.09 sen/kWh lower than peak — savings depend on actual usage split."),
     ]
     return [Situation(
         archetype_id=4, archetype_key="tou_switch", family="tariff",
@@ -181,8 +195,9 @@ def detect_rp4_tier_cliff(snap: HomeSnapshot) -> list[Situation]:
 
 def detect_peak_window_shift(snap: HomeSnapshot) -> list[Situation]:
     """#6 Schedulable appliances regularly run in peak window."""
-    if not snap.on_tou_tariff and snap.peak_window_kwh_fraction < 0.5:
-        return []  # only nudge people whose pattern actually leans peak-heavy
+    if not snap.on_tou_tariff:
+        return []  # shifting load in time only saves money under ToU pricing;
+        # standard RP4 has no time-of-use rate, so #4 tou_switch owns standard homes
     schedulable = {"dishwasher", "washer", "washing_machine", "dryer", "water_heater"}
     candidates = []
     for ev in snap.recent_events:
@@ -229,7 +244,8 @@ def detect_bill_trending_high(snap: HomeSnapshot) -> list[Situation]:
                                 f"(+{(ratio-1)*100:.0f}% vs 3-month average of {snap.last_3mo_avg_kwh:.0f} kWh)."),
     ]
     if driver:
-        evidence.append(Evidence("NILM attribution", f"Main driver: {driver.replace('_', ' ')} usage."))
+        evidence.append(Evidence(f"{_power_source_label(driver)} attribution",
+                                 f"Main driver: {driver.replace('_', ' ')} usage."))
     severity = "high" if ratio >= 1.25 else "medium"
     return [Situation(
         archetype_id=7, archetype_key="bill_trending_high", family="forecast",
@@ -254,8 +270,9 @@ def detect_comparative_regression(snap: HomeSnapshot) -> list[Situation]:
     for appliance, this_w, prev_w in flagged:
         delta_pct = (this_w / prev_w - 1) * 100
         evidence = [
-            Evidence("NILM", f"{appliance.title()} used {this_w:.1f} kWh this week vs {prev_w:.1f} kWh same week last month "
-                              f"(+{delta_pct:.0f}%)."),
+            Evidence(_power_source_label(appliance),
+                     f"{appliance.title()} used {this_w:.1f} kWh this week vs {prev_w:.1f} kWh same week last month "
+                     f"(+{delta_pct:.0f}%)."),
             Evidence("Routine engine", "External conditions (weather, calendar) appear similar — likely usage pattern change."),
         ]
         out.append(Situation(
@@ -339,7 +356,8 @@ def detect_inefficient_upgrade(snap: HomeSnapshot) -> list[Situation]:
         if current_w <= efficient_w * 1.3:
             continue  # not inefficient enough to be worth flagging
         evidence = [
-            Evidence("NILM steady-state", f"{appliance.title()} draws {current_w:.0f}W continuous (idle)."),
+            Evidence(f"{_power_source_label(appliance)} steady-state",
+                     f"{appliance.title()} draws {current_w:.0f}W continuous (idle)."),
             Evidence("ST efficiency registry", f"5-star class average for same size: {efficient_w:.0f}W."),
         ]
         out.append(Situation(

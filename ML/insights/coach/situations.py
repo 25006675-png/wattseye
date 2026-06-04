@@ -17,6 +17,11 @@ Family = Literal["waste", "tariff", "forecast", "context", "capital"]
 Severity = Literal["low", "medium", "high"]
 Effort = Literal["low", "medium", "high"]
 
+# Malaysian grid emission factor (kg CO2 per kWh, Peninsular grid, ~2023 figure).
+# CO2 avoided is derived from kWh genuinely *reduced* — not from RM saved, so
+# load-shifting / tariff cards (which move cost but not energy) report ~0 kg.
+GRID_EMISSION_KG_PER_KWH = 0.55
+
 
 @dataclass(frozen=True)
 class Evidence:
@@ -43,6 +48,7 @@ class Situation:
     # Filled by the quantifier
     impact_rm_monthly: float = 0.0
     impact_rm_event: float = 0.0
+    impact_kwh_monthly: float = 0.0   # energy genuinely reduced/month (0 for pure shift/tariff)
     effort: Effort = "low"
     confidence: float = 0.0
     extra_quantified: dict[str, Any] = field(default_factory=dict)
@@ -71,6 +77,8 @@ class Card:
 
     # Carried through
     impact_rm_monthly: float
+    impact_kwh_monthly: float
+    impact_co2_kg_monthly: float
     confidence: float
 
     # From ranker
@@ -131,6 +139,7 @@ class HomeSnapshot:
     today_max_temp_c: float | None = None
     hot_days_next_7: int = 0                        # count of forecast days > 33°C
     hot_day_ac_uplift_pct: float = 0.0              # learned correlation, 0-1+
+    avg_daily_ac_kwh: float = 0.0                   # baseline AC energy/day (for hot-day impact)
 
     # Capital-upgrade candidates (steady-state inefficient loads)
     inefficient_continuous_loads: list[dict[str, Any]] = field(default_factory=list)

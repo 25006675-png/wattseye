@@ -121,6 +121,41 @@ def get_forecast_safe(city: str = "Kuala Lumpur") -> WeatherForecast | None:
         return None
 
 
+def get_archive_daily_max(lat: float, lon: float, start_date: str, end_date: str,
+                          timezone: str = "Asia/Kuala_Lumpur") -> dict[str, float] | None:
+    """Historical daily max temperature (°C) per date, via Open-Meteo's archive API.
+
+    Returns {YYYY-MM-DD: max_temp_c} or None on failure. Used to correlate a home's
+    past AC usage with outdoor heat (the weather-AC uplift). Archive data never
+    changes, so it is cached long. Returns None (not an exception) if offline, so
+    snapshot building degrades gracefully instead of breaking.
+    """
+    key = f"archive_{lat:.3f}_{lon:.3f}_{start_date}_{end_date}"
+    path = CACHE_DIR / f"{key}.json"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            d = json.loads(path.read_text())
+            return dict(zip(d["daily"]["time"], d["daily"]["temperature_2m_max"]))
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
+    params = urlencode({
+        "latitude": lat, "longitude": lon, "daily": "temperature_2m_max",
+        "timezone": timezone, "start_date": start_date, "end_date": end_date,
+    })
+    url = f"https://archive-api.open-meteo.com/v1/archive?{params}"
+    try:
+        req = Request(url, headers={"User-Agent": USER_AGENT})
+        with urlopen(req, timeout=15) as resp:
+            raw = json.loads(resp.read().decode())
+        times = raw["daily"]["time"]
+        temps = raw["daily"]["temperature_2m_max"]
+        path.write_text(json.dumps(raw))
+        return {t: c for t, c in zip(times, temps) if c is not None}
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
     fc = get_forecast("Kuala Lumpur")
     print(f"{fc.city}: current {fc.current_temp_c:.1f}°C, today max {fc.today_max_c:.1f}°C")

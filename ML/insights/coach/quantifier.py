@@ -16,6 +16,7 @@ if str(_INSIGHTS) not in sys.path:
     sys.path.insert(0, str(_INSIGHTS))
 
 from tnb_tariff import (  # type: ignore
+    RP4,
     calculate_standard_bill,
     calculate_tou_bill,
     marginal_cost_rm,
@@ -42,6 +43,7 @@ def _q_left_on_empty(s: Situation, snap: HomeSnapshot) -> None:
     )
     s.impact_rm_event = max(rm_event, 0.0)
     s.impact_rm_monthly = round(s.impact_rm_event * weekly_freq * WEEKS_PER_MONTH, 2)
+    s.impact_kwh_monthly = round(event_kwh * weekly_freq * WEEKS_PER_MONTH, 2)
     s.effort = "low"  # enabling auto-off is a settings change
     s.confidence = _joint_confidence(s)
 
@@ -54,6 +56,7 @@ def _q_phantom_standby(s: Situation, snap: HomeSnapshot) -> None:
                           tariff=tariff, event_time=snap.timestamp,
                           afa_sen_per_kwh=snap.afa_sen_per_kwh)
     s.impact_rm_monthly = round(max(rm, 0.0), 2)
+    s.impact_kwh_monthly = round(monthly_kwh, 2)
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -68,6 +71,8 @@ def _q_simultaneous_peak_load(s: Situation, snap: HomeSnapshot) -> None:
     else:
         rm_per_event = saved_kwh_per_event * 0.05  # small benefit from avoiding tier creep
     s.impact_rm_monthly = round(rm_per_event * 4 * WEEKS_PER_MONTH, 2)
+    # Pure load-shift: energy isn't reduced, only moved off-peak -> no CO2 avoided.
+    s.impact_kwh_monthly = 0.0
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -80,6 +85,8 @@ def _q_tou_switch(s: Situation, snap: HomeSnapshot) -> None:
     tou = calculate_tou_bill(peak_kwh, offpeak_kwh, snap.afa_sen_per_kwh)
     saving = max(std.total_rm - tou.total_rm, 0.0)
     s.impact_rm_monthly = round(saving, 2)
+    # Tariff change: same energy, cheaper rate -> no CO2 avoided.
+    s.impact_kwh_monthly = 0.0
     s.effort = "low"
     s.extra_quantified = {
         "standard_rm": round(std.total_rm, 2),
@@ -97,10 +104,12 @@ def _q_rp4_tier_cliff(s: Situation, snap: HomeSnapshot) -> None:
         bill_now = calculate_standard_bill(proj, snap.afa_sen_per_kwh).total_rm
         bill_under = calculate_standard_bill(1499.0, snap.afa_sen_per_kwh).total_rm
         s.impact_rm_monthly = round(max(bill_now - bill_under, 0.0), 2)
+        s.impact_kwh_monthly = round(max(proj - 1499.0, 0.0), 2)
     else:
         # Below cliff — savings from staying below (avoid 10 sen/kWh jump on a hypothetical 30 kWh)
         avoidable_kwh = 30.0
         s.impact_rm_monthly = round(avoidable_kwh * 0.10, 2)
+        s.impact_kwh_monthly = round(avoidable_kwh, 2)
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -108,10 +117,14 @@ def _q_rp4_tier_cliff(s: Situation, snap: HomeSnapshot) -> None:
 def _q_peak_window_shift(s: Situation, snap: HomeSnapshot) -> None:
     peak_kwh = s.raw_metrics["peak_kwh"]
     monthly_shiftable_kwh = peak_kwh * (WEEKS_PER_MONTH / 2)  # last 14 days -> month
-    if snap.on_tou_tariff:
-        s.impact_rm_monthly = round(monthly_shiftable_kwh * 0.1755, 2)
-    else:
-        s.impact_rm_monthly = round(monthly_shiftable_kwh * 0.05, 2)
+    # Shifting a kWh out of the ToU peak window saves the peak-vs-off-peak
+    # generation gap (capacity + network are identical in both windows).
+    # Derived from the RP4 schedule, not a hardcoded constant — only ToU homes
+    # see a saving; standard RP4 has no time-of-use rate (see detect_peak_window_shift).
+    gap_sen = RP4.tou_peak.generation_low_band_sen - RP4.tou_offpeak.generation_low_band_sen
+    s.impact_rm_monthly = round(monthly_shiftable_kwh * gap_sen / 100.0, 2)
+    # Pure load-shift within ToU: energy moved, not reduced -> no CO2 avoided.
+    s.impact_kwh_monthly = 0.0
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -121,6 +134,7 @@ def _q_bill_trending_high(s: Situation, snap: HomeSnapshot) -> None:
     base_bill = calculate_standard_bill(snap.last_3mo_avg_kwh, snap.afa_sen_per_kwh).total_rm
     overage = max(proj_bill - base_bill, 0.0)
     s.impact_rm_monthly = round(overage, 2)
+    s.impact_kwh_monthly = round(max(snap.projected_monthly_kwh - snap.last_3mo_avg_kwh, 0.0), 2)
     s.effort = "medium"
     s.extra_quantified = {"projected_rm": round(proj_bill, 2), "baseline_rm": round(base_bill, 2)}
     s.confidence = _joint_confidence(s)
@@ -134,6 +148,7 @@ def _q_comparative_regression(s: Situation, snap: HomeSnapshot) -> None:
                           tariff=tariff, event_time=snap.timestamp,
                           afa_sen_per_kwh=snap.afa_sen_per_kwh)
     s.impact_rm_monthly = round(max(rm, 0.0), 2)
+    s.impact_kwh_monthly = round(max(monthly_delta, 0.0), 2)
     s.effort = "medium"
     s.confidence = _joint_confidence(s)
 
@@ -147,18 +162,33 @@ def _q_routine_shift(s: Situation, snap: HomeSnapshot) -> None:
                           tariff=tariff, event_time=snap.timestamp,
                           afa_sen_per_kwh=snap.afa_sen_per_kwh)
     s.impact_rm_monthly = round(max(rm, 0.0), 2)
+    s.impact_kwh_monthly = round(monthly_kwh, 2)
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
 
 def _q_weather_correlated_ac(s: Situation, snap: HomeSnapshot) -> None:
-    # Pre-cooling shifts ~1 kWh/hot-day from peak to off-peak
     hot_days = s.raw_metrics["hot_days"]
-    if snap.on_tou_tariff:
-        rm_per_day = 1.0 * 0.1755
+    uplift = max(snap.hot_day_ac_uplift_pct, 0.0) / 100.0
+    base = snap.avg_daily_ac_kwh
+    if base > 0 and uplift > 0:
+        # Extra AC energy attributable to heat over the hot days; pre-cooling /
+        # a +1°C setpoint recovers ~30% of it. Fully data-driven from the learned
+        # uplift and the home's own AC baseline.
+        extra_kwh = base * uplift * hot_days
+        kwh_saved = extra_kwh * 0.3
+        tariff = "tou" if snap.on_tou_tariff else "standard"
+        rm = marginal_cost_rm(kwh_saved, snap.projected_monthly_kwh - kwh_saved,
+                              tariff=tariff, event_time=snap.timestamp,
+                              afa_sen_per_kwh=snap.afa_sen_per_kwh)
+        s.impact_rm_monthly = round(max(rm, 0.0), 2)
+        s.impact_kwh_monthly = round(max(kwh_saved, 0.0), 2)
     else:
-        rm_per_day = 1.0 * 0.04
-    s.impact_rm_monthly = round(rm_per_day * hot_days, 2)
+        # Fallback when AC baseline is unknown (e.g. showcase): ~1 kWh/hot-day shiftable.
+        rm_per_day = 0.1755 if snap.on_tou_tariff else 0.04
+        s.impact_rm_monthly = round(rm_per_day * hot_days, 2)
+        # No measured AC baseline -> don't fabricate a kWh figure -> no CO2 claim.
+        s.impact_kwh_monthly = 0.0
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -173,6 +203,7 @@ def _q_anomaly_with_action(s: Situation, snap: HomeSnapshot) -> None:
                                 afa_sen_per_kwh=snap.afa_sen_per_kwh)
     s.impact_rm_event = max(rm_event, 0.0)
     s.impact_rm_monthly = round(s.impact_rm_event * 4, 2)
+    s.impact_kwh_monthly = round(event_kwh * 4, 2)
     s.effort = "low"
     s.confidence = _joint_confidence(s)
 
@@ -184,6 +215,7 @@ def _q_inefficient_upgrade(s: Situation, snap: HomeSnapshot) -> None:
                                   tariff="standard", event_time=snap.timestamp,
                                   afa_sen_per_kwh=snap.afa_sen_per_kwh)
     s.impact_rm_monthly = round(max(rm_monthly, 0.0), 2)
+    s.impact_kwh_monthly = round(max(monthly_kwh, 0.0), 2)
     yearly = s.impact_rm_monthly * 12
     replacement = s.raw_metrics.get("replacement_rm", 0)
     payback_years = (replacement / yearly) if yearly > 0 and replacement > 0 else None

@@ -43,6 +43,16 @@ Three reasons:
 
 The dedicated AC clamp also makes NILM better: by subtracting the known AC reading from the main signal, NILM gets a cleaner input for detecting non-AC appliances.
 
+## 3b. Q: Can you identify everything in the "unknown" load? Let users label all of it?
+
+Honestly, no — and we don't claim to. The unknown bucket is a *superposition* of many small loads (TV, router, chargers, standby) running at once. The load-bearing claim is **completeness, not itemization**: every watt that enters the home is measured and priced as a named aggregate, even when unlabeled. That already beats smart plugs, which are simply blind to anything not plugged into them.
+
+On top of that, one-tap labeling works for the **easy case**: an appliance that turns on as a clean, isolated, distinctive step. Detection is **edge-based** (`ML/signatures/signature_library.py`) — it keys off the power *step* (ΔW) at switch-on, so a rice cooker turning on at dinner registers as ~600 W *regardless of what else is already running*, not as part of a smeared total. The user labels that signature once and it becomes a tracked appliance.
+
+What edge labeling deliberately does **not** do: decompose a tangled always-on cluster, separate two appliances that switch on in the same instant, track variable loads with no clean step, or count identical units. For those, the right product answer is the **aggregate insight** ("48 W overnight standby ≈ RM 6/month, likely TV cluster + router"), not a false per-device breakdown — and for per-unit tracking of one device, the optional smart plug.
+
+Framing line: *"We measure 100% of the bill. We label what has a clean signature — directly (AC clamp), by model (NILM), or one-tap for distinctive loads — and we never pretend a five-appliance blur is one device."*
+
 ## 4. Q: Is the AI always accurate?
 
 No.

@@ -231,7 +231,9 @@ def anomaly_score(appliance: str, peak_w: float, duration_min: float,
         )
     features = np.array([[ids[appliance], peak_w, duration_min, hour_of_day, day_of_week]],
                         dtype=np.float64)
-    score = float(-model.score_samples(features)[0])
+    # decision_function: negative = anomalous, positive = normal. This matches the coach
+    # detector's convention (flags when score < -0.1) and the demo snapshot (-0.42).
+    score = float(model.decision_function(features)[0])
     is_anomaly = bool(model.predict(features)[0] == -1)
     return {"score": round(score, 4), "is_anomaly": is_anomaly}
 
