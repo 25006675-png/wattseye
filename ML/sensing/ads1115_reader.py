@@ -250,7 +250,14 @@ def main() -> None:
         if args.simulate:
             buffers = _read_simulated_window(loop_start - start)
         else:
-            buffers = _read_hardware_window(args.interval)
+            try:
+                buffers = _read_hardware_window(args.interval)
+            except OSError as e:
+                # Transient I2C glitch (e.g. Errno 5 on a power blip): skip this
+                # tick and keep running instead of letting the whole reader die.
+                print(f"i2c read error, skipping sample: {e}", file=sys.stderr)
+                time.sleep(args.interval)
+                continue
 
         msg = build_power_message(*buffers)
         encoded = json.dumps(msg)
