@@ -15,10 +15,9 @@ How to read the output, per channel:
     sensing the conductor (clamp on wrong wire / both conductors / not seated).
 
 Channels (HARDWARE_CONNECTION.md §6-8):
-  A0 = main feeder current (SCT-013 #1)
+  A3 = main feeder current (SCT-013 #1)
   A1 = mains voltage       (ZMPT101B OUT)
   A2 = dedicated AC current(SCT-013 #2)
-  A3 = ESP32 voltage       (raw voltage ESP32 is providing)
 
 Run on the Pi:
   python -m ML.sensing.diag_raw                 # forever, 1 s windows
@@ -31,7 +30,7 @@ from __future__ import annotations
 import argparse
 import time
 
-CHANNELS = {0: "A0 main-I", 1: "A1 voltage", 2: "A2 ac-I", 3: "A3 ESP32-V"}
+CHANNELS = {3: "A3 main-I", 1: "A1 voltage", 2: "A2 ac-I"}
 MIDPOINT_V = 1.65  # expected DC bias for a 3.3 V single-supply front end
 
 
