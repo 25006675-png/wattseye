@@ -2,7 +2,7 @@
 per second over MQTT. This is the Pi-side live sensing process.
 
 Wiring (see HARDWARE_CONNECTION.md §6-8):
-    A0 = main feeder current  (SCT-013 #1, biased to 1.65 V)
+    A3 = main feeder current  (SCT-013 #1, biased to 1.65 V)
     A1 = mains voltage        (ZMPT101B OUT, trimpot-tuned)
     A2 = dedicated AC current (SCT-013 #2, biased to 1.65 V)
 
@@ -130,7 +130,7 @@ def _read_hardware_window(duration_s: float = 1.0):
     ads.data_rate = 860  # fastest; nets ~250 SPS/channel after the mux
     # P0..P3 are single-ended channel indices (0..3). Some adafruit_ads1x15
     # versions don't expose them as ADS.P* attributes, so fall back to the int.
-    a_main = AnalogIn(ads, getattr(ADS, "P0", 0))
+    a_main = AnalogIn(ads, getattr(ADS, "P3", 3))
     a_volt = AnalogIn(ads, getattr(ADS, "P1", 1))
     a_ac = AnalogIn(ads, getattr(ADS, "P2", 2))
 
