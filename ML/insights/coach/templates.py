@@ -28,20 +28,34 @@ def _rm(x: float) -> str:
     return f"RM {x:.2f}" if x < 10 else f"RM {x:.0f}"
 
 
+def _duration_label(minutes: float) -> str:
+    if minutes < 1:
+        return f"{round(minutes * 60)} sec"
+    return f"{int(minutes)} min"
+
+
 # ---------- per-archetype templates ----------
 
 def _t_left_on_empty(s: Situation) -> Card:
     appliance = (s.appliance or "appliance").replace("_", " ").title()
-    minutes = int(s.raw_metrics["minutes_empty"])
+    minutes = float(s.raw_metrics["minutes_empty"])
+    threshold_minutes = float(s.raw_metrics.get("threshold_minutes", 20))
+    duration = _duration_label(minutes)
+    threshold = _duration_label(threshold_minutes)
     watts = s.raw_metrics["watts"]
     headline = f"{appliance} running in empty room"
-    impact = (f"{appliance} ran {minutes} min after the room emptied. "
+    impact = (f"{appliance} ran {duration} after the room emptied. "
               f"At your current pattern, this costs about {_rm(s.impact_rm_monthly)}/month.")
-    action = f"Enable auto-off on {appliance.lower()} after 20 min empty."
+    action = f"Enable auto-off on {appliance.lower()} after {threshold} empty."
     math = [
         f"{watts:.0f}W × {minutes} min ÷ 60 = {watts * minutes / 60 / 1000:.2f} kWh wasted this event",
         f"Event cost via TNB RP4 marginal pricing: {_rm(s.impact_rm_event)}",
         f"Weekly frequency × 4.345 weeks/month → {_rm(s.impact_rm_monthly)}/month",
+    ]
+    math = [
+        f"{watts:.0f}W x {duration} = {watts * minutes / 60 / 1000:.4f} kWh wasted this event",
+        f"Event cost via TNB RP4 marginal pricing: {_rm(s.impact_rm_event)}",
+        f"Weekly frequency x 4.345 weeks/month -> {_rm(s.impact_rm_monthly)}/month",
     ]
     return _build(s, headline, impact, action, math)
 

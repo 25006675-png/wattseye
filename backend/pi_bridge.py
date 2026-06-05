@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -64,6 +65,20 @@ RM_PER_KWH = 0.45
 
 # How often we recompute + write the dashboard payload.
 TICK_INTERVAL_S = 1.0
+
+# Per-rig INPUT CALIBRATION for live NILM (not fine-tuning — weights untouched).
+# The checkpoints learned UK-DALE's aggregate scale; this rig's residual lands a
+# few hundred watts low (CT/PF), so an in-distribution ~2 kW kettle reads below
+# the model's detection knee. This gain maps the rig's residual onto the training
+# scale before inference. 1.0 = off. Tune per rig; ~1.35 detected this kettle.
+NILM_GAIN = float(os.environ.get("WATTSEYE_NILM_GAIN", "1.0"))
+
+# Live NILM display policy (see build_dashboard_payload): only the kettle is
+# trusted live on this rig — the other models are cross-talk. Cap the kettle tile
+# at its typical real draw so a co-running load shows as a separate "unknown" tile
+# instead of inflating the kettle. UNKNOWN_MIN_W suppresses sub-threshold residue.
+NILM_KETTLE_NOMINAL_W = float(os.environ.get("WATTSEYE_KETTLE_W", "1900"))
+UNKNOWN_MIN_W = 250.0
 
 
 @dataclass
@@ -140,27 +155,35 @@ def build_dashboard_payload(state: BridgeState) -> dict:
     # a partial day, which explodes near midnight) and easy to read.
     projected_bill = round((state.main_watts / 1000.0) * 24 * 30 * RM_PER_KWH, 2)
 
-    def _entry(name: str, watts: float) -> dict:
+    def _entry(name: str, watts: float, kind: str = "estimated") -> dict:
         share = watts / max(1.0, state.main_watts)
         return {
             "name": name,
             "watts": round(watts, 1),
             "today_kwh": round(kwh_today * share, 2),
             "today_rm": round(today_cost * share, 2),
+            "kind": kind,
         }
 
     appliances = []
     if state.ac_watts > 5:
-        appliances.append(_entry("ac", state.ac_watts))
+        appliances.append(_entry("ac", state.ac_watts, "measured"))
 
-    # If live NILM is enabled and labelled the residual, show per-appliance tiles;
-    # otherwise fall back to the single aggregate "other" bucket.
-    nilm_on = {n: r for n, r in state._nilm_result.items() if r.get("on")}
-    if nilm_on:
-        for name, r in nilm_on.items():
-            appliances.append(_entry(name, r["watts"]))
-    elif state.residual_watts > 5:
-        appliances.append(_entry("other", state.residual_watts))
+    # Live NILM policy: trust ONLY the kettle detection. On this rig the other
+    # models are cross-talk (a kettle pulse bleeds into fridge/iron), so NILM is
+    # used purely as a kettle classifier. The residual carries the trustworthy
+    # watts: cap the kettle at its typical draw and surface anything left over as
+    # an honest "unknown" load, so a second appliance is never silently absorbed.
+    kettle_on = bool(state._nilm_result.get("kettle", {}).get("on"))
+    residual = state.residual_watts
+    if kettle_on and residual > 5:
+        kettle_w = min(residual, NILM_KETTLE_NOMINAL_W)
+        appliances.append(_entry("kettle", kettle_w, "estimated"))
+        leftover = residual - kettle_w
+        if leftover > UNKNOWN_MIN_W:
+            appliances.append(_entry("unknown", leftover, "unknown"))
+    elif residual > 5:
+        appliances.append(_entry("unknown", residual, "unknown"))
 
     return {
         "timestamp": now.isoformat(timespec="seconds"),
@@ -182,7 +205,9 @@ def apply_power_message(state: BridgeState, msg: dict) -> None:
     state.residual_watts = float(msg.get("residual_watts", 0.0))
     state.vrms = float(msg.get("vrms", 0.0))
     if state.nilm is not None:
-        state.nilm.add_sample(state.residual_watts, time.time())
+        # Apply the rig->training input calibration so live loads land in the
+        # model's distribution (see NILM_GAIN). Display/cost paths are unaffected.
+        state.nilm.add_sample(state.residual_watts * NILM_GAIN, time.time())
 
 
 def apply_occupancy_message(state: BridgeState, msg: dict) -> None:
@@ -196,6 +221,45 @@ def apply_occupancy_message(state: BridgeState, msg: dict) -> None:
 
 
 # --- live (broker-connected) runtime ----------------------------------------
+
+
+def _notify_ac_off(decision: dict) -> None:
+    """Best-effort Gemini-phrased WhatsApp confirmation after an auto cutoff.
+
+    Reuses the existing Gemini/Meta pipeline but sends directly (bypassing the
+    coach rate-limiter) since the bridge already debounces to once per empty
+    episode. Never raises — a WhatsApp failure must not block the cutoff.
+    """
+    try:
+        from types import SimpleNamespace
+
+        from ML.insights.coach.whatsapp import (
+            MetaConfig,
+            _meta_send,
+            render_message_via_llm,
+        )
+
+        ac_w = float(decision.get("ac_watts", 0.0))
+        saved_rm = round(ac_w / 1000.0 * RM_PER_KWH, 2)  # ringgit saved per hour
+        card = SimpleNamespace(
+            headline="AC auto-switched off (room was empty)",
+            impact_text=f"The aircon was drawing {ac_w:.0f}W in an empty room.",
+            action_text="WattsEye switched it off so it stops wasting power.",
+            saving_text=f"Saving about RM{saved_rm:.2f} per hour",
+            effort_text="Done automatically",
+            appliance="aircon",
+            archetype_key="left_on_empty",
+        )
+        body = render_message_via_llm(card)
+        cfg = MetaConfig.from_env()
+        if cfg is None:
+            print("--> WhatsApp confirm skipped: Meta env vars not set")
+            return
+        res = _meta_send(cfg, body)
+        mid = (res.get("messages") or [{}])[0].get("id")
+        print(f"--> WhatsApp auto-off confirmation sent: id={mid}")
+    except Exception as e:  # noqa: BLE001 — never let WhatsApp break the cutoff
+        print(f"--> WhatsApp confirm failed (non-fatal): {e}", file=sys.stderr)
 
 
 def run_live(broker: str, port: int) -> None:
@@ -251,6 +315,10 @@ def run_live(broker: str, port: int) -> None:
                     }
                     client.publish(AC_COMMAND_TOPIC, json.dumps(command), qos=1)
                     print(f"--> AC auto-off published (smart rule): {command}")
+                    # Non-blocking: the cutoff already published above; send the
+                    # Gemini WhatsApp in a daemon thread so the loop never stalls.
+                    threading.Thread(target=_notify_ac_off, args=(decision,),
+                                     daemon=True).start()
                 else:  # "remind": nudge the user via WhatsApp, don't touch the AC
                     # Schedule an immediately-due reminder; the daemon running in
                     # api_server (reminders.start) picks it up within ~5s and pushes

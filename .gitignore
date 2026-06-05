@@ -35,3 +35,10 @@ backend/reminders.json
 datasets/
 flutter-web.err
 wattseye_app/flutter-web.err
+flutter_run.log
+
+# Local demo/runtime helpers with secrets or one-off test output
+set_token.sh
+test_rule.sh
+test_empty_card.sh
+run_remind_test.sh

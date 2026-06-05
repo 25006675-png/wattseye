@@ -196,9 +196,28 @@ def build_power_message(v_buf, i_main_buf, i_ac_buf) -> dict:
 def _make_mqtt_client(host: str, port: int):
     import paho.mqtt.client as mqtt  # type: ignore
 
-    client = mqtt.Client(client_id="wattseye-ads1115-reader")
+    # paho-mqtt 2.x needs the callback API version; 1.x has no such arg.
+    try:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,
+                             client_id="wattseye-ads1115-reader")
+    except AttributeError:  # paho-mqtt < 2.0
+        client = mqtt.Client(client_id="wattseye-ads1115-reader")
+
+    def _on_connect(_client, _userdata, _flags, rc):
+        print(f"MQTT CONNACK rc={rc} ({'ok' if rc == 0 else 'REJECTED'})")
+    client.on_connect = _on_connect
+
     client.connect(host, port, keepalive=30)
     client.loop_start()
+    # Wait for the CONNACK to land. Without this, the first qos=0 publishes fire
+    # before the handshake completes and paho drops them silently (NO_CONN).
+    for _ in range(50):
+        if client.is_connected():
+            break
+        time.sleep(0.1)
+    if not client.is_connected():
+        print("WARNING: MQTT handshake did not complete in 5s — publishes will drop",
+              file=sys.stderr)
     return client
 
 
@@ -231,12 +250,21 @@ def main() -> None:
         if args.simulate:
             buffers = _read_simulated_window(loop_start - start)
         else:
-            buffers = _read_hardware_window(args.interval)
+            try:
+                buffers = _read_hardware_window(args.interval)
+            except OSError as e:
+                # Transient I2C glitch (e.g. Errno 5 on a power blip): skip this
+                # tick and keep running instead of letting the whole reader die.
+                print(f"i2c read error, skipping sample: {e}", file=sys.stderr)
+                time.sleep(args.interval)
+                continue
 
         msg = build_power_message(*buffers)
         encoded = json.dumps(msg)
         if client is not None:
-            client.publish(POWER_TOPIC, encoded, qos=0)
+            info = client.publish(POWER_TOPIC, encoded, qos=0)
+            if info.rc != 0:
+                print(f"publish failed: rc={info.rc} (not connected?)", file=sys.stderr)
         else:
             print(encoded)
 

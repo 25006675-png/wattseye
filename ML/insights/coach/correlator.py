@@ -13,14 +13,15 @@ Archetype taxonomy (5 families, 12 archetypes — see recommendation.md notes):
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from typing import Iterable
 
 from .situations import Evidence, HomeSnapshot, Situation
 
 # Thresholds that gate detection. Centralised so they're easy to audit.
-LEFT_ON_MIN_DURATION_MIN = 20
-LEFT_ON_MIN_POWER_W = 200            # ignore tiny loads (phone charger)
+LEFT_ON_MIN_DURATION_MIN = float(os.environ.get("WATTSEYE_LEFT_ON_MIN_DURATION_MIN", "20"))
+LEFT_ON_MIN_POWER_W = float(os.environ.get("WATTSEYE_LEFT_ON_MIN_POWER_W", "200"))  # ignore tiny loads (phone charger)
 STANDBY_FLAG_W = 30
 TIER_CLIFF_KWH = 1500
 TIER_CLIFF_PROXIMITY_KWH = 80        # warn when projected within 80 kWh of cliff
@@ -88,7 +89,7 @@ def detect_left_on_empty(snap: HomeSnapshot) -> list[Situation]:
         power_source = _power_source_label(appliance)
         power_conf = 0.95 if power_source == "Dedicated CT clamp" else 0.85
         evidence = [
-            Evidence("Occupancy", f"Room empty since {snap.occupancy_since.strftime('%H:%M')} ({int(minutes_empty)} min).", 0.9),
+            Evidence("Occupancy", f"Room empty since {snap.occupancy_since.strftime('%H:%M')} ({_duration_label(minutes_empty)}).", 0.9),
             Evidence(power_source, f"{appliance.replace('_', ' ').title()} drawing {watts:.0f}W.", power_conf),
             Evidence("K-Means phase", f"Current phase: {snap.current_phase}.", 0.8),
         ]
@@ -110,11 +111,18 @@ def detect_left_on_empty(snap: HomeSnapshot) -> list[Situation]:
             raw_metrics={
                 "watts": watts,
                 "minutes_empty": minutes_empty,
+                "threshold_minutes": LEFT_ON_MIN_DURATION_MIN,
                 "in_peak": _is_peak_window(snap.timestamp),
                 "weekly_frequency": baseline.get("empty_overlap_per_week", 4),
             },
         ))
     return out
+
+
+def _duration_label(minutes: float) -> str:
+    if minutes < 1:
+        return f"{round(minutes * 60)} sec"
+    return f"{int(minutes)} min"
 
 
 def detect_phantom_standby(snap: HomeSnapshot) -> list[Situation]:

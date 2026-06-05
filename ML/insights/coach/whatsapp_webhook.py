@@ -293,6 +293,29 @@ def _send_ack(ack_text: str, to: str) -> None:
         log.warning("ack send failed (%s)", e)
 
 
+def _cut_ac() -> bool:
+    """Publish the AC cutoff to the local MQTT broker (-> pi_bridge/ESP32).
+
+    One-shot publish so the webhook needs no long-lived MQTT client. Returns
+    True on success.
+    """
+    try:
+        import paho.mqtt.publish as publish
+
+        cmd = json.dumps({
+            "command": "off",
+            "reason": "whatsapp_reply",
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        })
+        publish.single("wattseye/ac/command", cmd,
+                       hostname="127.0.0.1", port=1883, qos=1)
+        log.info("AC cutoff published from WhatsApp reply")
+        return True
+    except Exception as e:
+        log.warning("AC cut publish failed: %s", e)
+        return False
+
+
 # ---------- Flask app ----------
 
 def create_app():
@@ -335,7 +358,14 @@ def create_app():
                      classification["stage"], classification.get("reason", ""))
 
             record_user_action(archetype or "unknown", classification, body, from_number)
-            _send_ack(compose_ack(classification), from_number)
+
+            ack = compose_ack(classification)
+            # Reply-driven AC cutoff: a confident "YES" to the empty-room alert
+            # turns the AC off for real (-> ESP32) and confirms in Manglish.
+            if classification["intent"] == "accept" and classification["confidence"] >= 0.70:
+                if _cut_ac():
+                    ack = "Ok bro, dah matikan aircon. Jimat elektrik — tengok app WattsEye."
+            _send_ack(ack, from_number)
 
         return Response(status=200)
 

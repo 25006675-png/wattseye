@@ -17,6 +17,7 @@ silently.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,8 @@ RULE_PATH = Path(__file__).resolve().parent / "_smart_rule.json"
 
 # The occupancy engine only calls an episode "waste" at >= EMPTY_ROOM_MINUTES
 # (10 min), so the rule threshold can't meaningfully go below that.
-MIN_EMPTY_MINUTES = 10.0
+# Override-able so a 10-second demo threshold is possible (default = real 10 min).
+MIN_EMPTY_MINUTES = float(os.environ.get("WATTSEYE_RULE_MIN_MINUTES", "10"))
 MAX_EMPTY_MINUTES = 60.0
 MODES = ("remind", "auto_off")
 

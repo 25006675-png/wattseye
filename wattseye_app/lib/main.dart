@@ -391,23 +391,54 @@ class _HomeShellState extends State<HomeShell> {
   final _api = WattsEyeApi();
   int _selectedIndex = 0;
   bool _touPreview = false;
-  // Global mode: Demo = showcase coach catalog + synthetic dashboard; Live =
-  // real coach cards + real sensor. One toggle in the AppBar drives both.
-  bool _demoMode = true;
+  // Global data source for the demo, driven by the AppBar toggle:
+  //   'showcase' = the 12-archetype catalog + synthetic dashboard
+  //   'replay'   = the real iAWE (Indian) sub-metered dataset feeding the coach
+  //   'live'     = the real Pi sensor feed
+  String _coachMode = 'showcase';
   late List<CoachCardState> _cards;
   DashboardSnapshot? _dashboard;
   IntegrationStatus? _integrations;
   BillInfo? _bill;
   List<HistoryDay> _history = const [];
   bool _backendOnline = false;
+  Timer? _liveTimer;
 
-  String get _coachMode => _demoMode ? 'showcase' : 'live';
+  // The dashboard only has live vs synthetic (no iAWE-backed dashboard yet), so
+  // it shows live sensor data in 'live' and the demo snapshot otherwise.
+  bool get _demoMode => _coachMode != 'live';
 
   @override
   void initState() {
     super.initState();
     _cards = _coachCards.map((card) => CoachCardState(card)).toList();
     _refreshBackendData();
+    // Poll the live dashboard so the power + appliance tiles update on screen
+    // without a manual pull-to-refresh. Dashboard-only so coach cards (and any
+    // in-progress card interaction) aren't reset every tick.
+    _liveTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refreshDashboardOnly(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _liveTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshDashboardOnly() async {
+    try {
+      final dashboard = await _api.getDashboard();
+      if (!mounted) return;
+      setState(() {
+        _dashboard = dashboard;
+        _backendOnline = true;
+      });
+    } catch (_) {
+      // Transient miss: keep the last values rather than flipping to offline.
+    }
   }
 
   Future<void> _refreshBackendData() async {
@@ -439,15 +470,15 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  Future<void> _setDemoMode(bool demo) async {
-    if (demo == _demoMode) return;
-    setState(() => _demoMode = demo);
+  Future<void> _setCoachMode(String mode) async {
+    if (mode == _coachMode) return;
+    setState(() => _coachMode = mode);
     try {
       final cards = await _api.getCoachCards(mode: _coachMode);
       if (!mounted) return;
       setState(() => _cards = cards.map(_coachCardFromApi).toList());
     } catch (_) {
-      // Offline: keep showing the current card set (showcase fallback).
+      // Offline: keep showing the current card set.
     }
   }
 
@@ -563,7 +594,7 @@ class _HomeShellState extends State<HomeShell> {
       ),
       CoachPage(
         cards: _cards,
-        demoMode: _demoMode,
+        mode: _coachMode,
         onRefresh: _refreshBackendData,
         onCardTap: _openCoachCard,
         onAction: _markAction,
@@ -588,7 +619,7 @@ class _HomeShellState extends State<HomeShell> {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Center(
-              child: ModeToggle(demo: _demoMode, onChanged: _setDemoMode),
+              child: SourceToggle(mode: _coachMode, onChanged: _setCoachMode),
             ),
           ),
         ],
@@ -684,7 +715,19 @@ class AcSmartRuleControl extends StatefulWidget {
 }
 
 class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
-  AcRule _rule = const AcRule(enabled: true, emptyMinutes: 15, mode: 'auto_off');
+  static const double _demoTenSecondsMinutes = 10 / 60;
+  static const List<_RuleDelayOption> _delayOptions = [
+    _RuleDelayOption('10 sec', _demoTenSecondsMinutes),
+    _RuleDelayOption('10 min', 10),
+    _RuleDelayOption('15 min', 15),
+    _RuleDelayOption('30 min', 30),
+  ];
+
+  AcRule _rule = const AcRule(
+    enabled: true,
+    emptyMinutes: 15,
+    mode: 'auto_off',
+  );
   bool _loaded = false;
 
   @override
@@ -721,11 +764,21 @@ class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
     }
   }
 
+  String _delayLabel(double minutes) {
+    if (minutes < 1) return '${(minutes * 60).round()} sec';
+    return '${minutes.round()} min';
+  }
+
+  bool _isSelectedDelay(double minutes) =>
+      (_rule.emptyMinutes - minutes).abs() < 0.02;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final editable = _loaded && widget.backendOnline;
-    final minutes = _rule.emptyMinutes.round();
+    final delayLabel = _delayLabel(_rule.emptyMinutes);
+    final canDecrease = _rule.emptyMinutes > _demoTenSecondsMinutes + 0.02;
+    final canIncrease = _rule.emptyMinutes < 60;
     return Container(
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(12),
@@ -759,7 +812,7 @@ class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
             !widget.backendOnline
                 ? 'Start the backend to change this rule.'
                 : _rule.enabled
-                ? 'If AC runs while the room is empty for $minutes min, '
+                ? 'If AC runs while the room is empty for $delayLabel, '
                       '${_rule.mode == 'auto_off' ? 'auto-turn it off.' : 'remind me.'}'
                 : 'Off — WattsEye won’t act on an empty-room AC automatically.',
             style: theme.textTheme.bodySmall,
@@ -791,23 +844,45 @@ class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
                 const Spacer(),
                 IconButton(
                   visualDensity: VisualDensity.compact,
-                  onPressed: editable && minutes > 10
-                      ? () => _save(
-                          _rule.copyWith(emptyMinutes: _rule.emptyMinutes - 5),
-                        )
+                  onPressed: editable && canDecrease
+                      ? () {
+                          final current = _rule.emptyMinutes;
+                          final next = current <= 10
+                              ? _demoTenSecondsMinutes
+                              : current - 5;
+                          _save(_rule.copyWith(emptyMinutes: next));
+                        }
                       : null,
                   icon: const Icon(Icons.remove_circle_outline, size: 20),
                 ),
-                Text('$minutes min', style: theme.textTheme.titleSmall),
+                Text(delayLabel, style: theme.textTheme.titleSmall),
                 IconButton(
                   visualDensity: VisualDensity.compact,
-                  onPressed: editable && minutes < 60
-                      ? () => _save(
-                          _rule.copyWith(emptyMinutes: _rule.emptyMinutes + 5),
-                        )
+                  onPressed: editable && canIncrease
+                      ? () {
+                          final current = _rule.emptyMinutes;
+                          final next = current < 10 ? 10.0 : current + 5;
+                          _save(_rule.copyWith(emptyMinutes: next));
+                        }
                       : null,
                   icon: const Icon(Icons.add_circle_outline, size: 20),
                 ),
+              ],
+            ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final option in _delayOptions)
+                  ChoiceChip(
+                    label: Text(option.label),
+                    selected: _isSelectedDelay(option.minutes),
+                    onSelected: editable
+                        ? (_) => _save(
+                            _rule.copyWith(emptyMinutes: option.minutes),
+                          )
+                        : null,
+                  ),
               ],
             ),
           ],
@@ -815,6 +890,13 @@ class _AcSmartRuleControlState extends State<AcSmartRuleControl> {
       ),
     );
   }
+}
+
+class _RuleDelayOption {
+  const _RuleDelayOption(this.label, this.minutes);
+
+  final String label;
+  final double minutes;
 }
 
 class DashboardPage extends StatefulWidget {
@@ -1438,7 +1520,7 @@ class CoachPage extends StatefulWidget {
   const CoachPage({
     super.key,
     required this.cards,
-    required this.demoMode,
+    required this.mode,
     required this.onRefresh,
     required this.onCardTap,
     required this.onAction,
@@ -1446,7 +1528,7 @@ class CoachPage extends StatefulWidget {
   });
 
   final List<CoachCardState> cards;
-  final bool demoMode;
+  final String mode; // 'showcase' | 'replay' | 'live'
   final Future<void> Function() onRefresh;
   final ValueChanged<String> onCardTap;
   final Future<void> Function(String keyName, InsightAction action) onAction;
@@ -1494,9 +1576,11 @@ class _CoachPageState extends State<CoachPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            widget.demoMode
-                ? 'Demo: all 12 recommendation types (catalog) - not one real home.'
-                : 'Live: cards from the Pi feed (or the bench log) - the real, sparser set.',
+            widget.mode == 'replay'
+                ? 'iAWE: real Indian sub-metered home (2013 dataset) - validates the coach on real data.'
+                : widget.mode == 'live'
+                ? 'Live: cards from the Pi sensor feed - the real, sparser set.'
+                : 'Demo: all 12 recommendation types (catalog) - not one real home.',
             style: Theme.of(context).textTheme.labelSmall,
           ),
           const SizedBox(height: 12),
@@ -1520,7 +1604,18 @@ class _CoachPageState extends State<CoachPage> {
             ],
           ),
           const SizedBox(height: 16),
-          if (visibleCards.isEmpty)
+          if (widget.cards.isEmpty)
+            InfoCard(
+              child: Text(
+                widget.mode == 'live'
+                    ? 'No live Pi data yet - start the sensing + bridge on the Pi, then pull to refresh.'
+                    : widget.mode == 'replay'
+                    ? 'iAWE dataset not available on this backend.'
+                    : 'No insights right now.',
+                style: const TextStyle(color: AppTheme.muted),
+              ),
+            )
+          else if (visibleCards.isEmpty)
             const InfoCard(
               child: Text(
                 'No insights match the selected filters.',
@@ -1678,9 +1773,7 @@ class CardDetailScreen extends StatelessWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: [
-              FamilyTag(family: data.family),
-            ],
+            children: [FamilyTag(family: data.family)],
           ),
           const SizedBox(height: 12),
           Text(data.headline, style: Theme.of(context).textTheme.titleLarge),
@@ -2593,7 +2686,9 @@ class _WhatIfSimulatorState extends State<WhatIfSimulator> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    exact ? 'New forecast · tariff-engine exact' : 'New forecast · estimate',
+                    exact
+                        ? 'New forecast · tariff-engine exact'
+                        : 'New forecast · estimate',
                     style: Theme.of(context).textTheme.labelSmall,
                   ),
                   Text(
@@ -2783,11 +2878,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   'Measured directly - 29% of projected bill',
                   'RM43.20',
                 ),
-                BillLine(
-                  'Fridge',
-                  'Estimated via NILM',
-                  '~RM18.70',
-                ),
+                BillLine('Fridge', 'Estimated via NILM', '~RM18.70'),
                 BillLine('Kettle', 'Estimated - normal routine', '~RM4.70'),
                 BillLine(
                   'Unknown / Other',
@@ -3872,11 +3963,11 @@ class ChipLabel extends StatelessWidget {
 }
 
 /// Compact global Demo/Live pill toggle for the AppBar.
-class ModeToggle extends StatelessWidget {
-  const ModeToggle({super.key, required this.demo, required this.onChanged});
+class SourceToggle extends StatelessWidget {
+  const SourceToggle({super.key, required this.mode, required this.onChanged});
 
-  final bool demo;
-  final ValueChanged<bool> onChanged;
+  final String mode; // 'showcase' | 'replay' | 'live'
+  final ValueChanged<String> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -3889,8 +3980,19 @@ class ModeToggle extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _seg('Demo', demo, AppTheme.amber, () => onChanged(true)),
-          _seg('Live', !demo, AppTheme.green, () => onChanged(false)),
+          _seg(
+            'Demo',
+            mode == 'showcase',
+            AppTheme.amber,
+            () => onChanged('showcase'),
+          ),
+          _seg(
+            'iAWE',
+            mode == 'replay',
+            AppTheme.primary,
+            () => onChanged('replay'),
+          ),
+          _seg('Live', mode == 'live', AppTheme.green, () => onChanged('live')),
         ],
       ),
     );

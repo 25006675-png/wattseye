@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
+
 try:
     from .models import ApplianceEvent, EngineResult
 except ImportError:
     from models import ApplianceEvent, EngineResult
 
 
-HIGH_POWER_WATTS = 700.0
-EMPTY_ROOM_MINUTES = 10.0
+# Defaults are the real thresholds; env overrides let a live demo trigger fast
+# (e.g. a low-watt fan and a ~10-second empty window).
+HIGH_POWER_WATTS = float(os.environ.get("WATTSEYE_HIGH_POWER_WATTS", "700"))
+EMPTY_ROOM_MINUTES = float(os.environ.get("WATTSEYE_EMPTY_ROOM_MINUTES", "10"))
 
 
 def analyze_occupancy(event: ApplianceEvent) -> EngineResult:
