@@ -230,37 +230,31 @@ def coach_cards_payload(mode: str = "showcase") -> list[dict[str, Any]]:
     return payload
 
 
-def _select_coach_snapshot(mode: str):
-    """Return (snapshot, source_label).
-
-    showcase -> the hand-built demo literal that trips all 12 archetypes.
-    live     -> the Pi's live_state if fresh, else the bench-log history, else
-                (no data) the demo literal so the tab never renders empty.
-    """
-    if mode != "live":
-        return _demo_snapshot(), "showcase"
-    from backend.snapshot_builder import (
-        IAWE_COORDS, IAWE_HISTORY_DB, from_history, from_live_state,
-    )
-
-    snap = from_live_state()
-    if snap is not None:
-        return snap, "live"
-    # Real sub-metered home (iAWE) is the primary replay source; fall back to the
-    # synthetic Malaysian fixture, then to the demo literal so the tab never empties.
-    snap = from_history(IAWE_HISTORY_DB, lat=IAWE_COORDS[0], lon=IAWE_COORDS[1])
-    if snap is not None:
-        return snap, "replay"
-    snap = from_history()
-    if snap is not None:
-        return snap, "replay"
-    return _demo_snapshot(), "showcase"
-
-
 def _coach_cards(mode: str = "showcase"):
+    """Build coach cards for an explicit source. Each mode is strict — no silent
+    fallback — so the in-app Demo / iAWE / Live toggle shows exactly what it says.
+
+      showcase -> the 12-archetype catalog (demo + peak-heavy union).
+      replay   -> the real iAWE (Indian) sub-metered dataset.
+      live     -> the Pi's live_state, only if fresh (else empty -> "no Pi data").
+    """
     if mode == "live":
-        snap, source = _select_coach_snapshot("live")
-        return generate_cards(snap, surface_count=2, include_weather=True), source
+        from backend.snapshot_builder import from_live_state
+        snap = from_live_state()
+        if snap is None:
+            return [], "live"
+        return generate_cards(snap, surface_count=2, include_weather=True), "live"
+
+    if mode == "replay":
+        from backend.snapshot_builder import IAWE_COORDS, IAWE_HISTORY_DB, from_history
+        snap = from_history(IAWE_HISTORY_DB, lat=IAWE_COORDS[0], lon=IAWE_COORDS[1])
+        if snap is None:
+            return [], "replay"
+        # apply_feedback=False: replay is a demo view over a fixed 2013 dataset, so
+        # real-world dismiss/shown logs must not leak in (and their 2026 timestamps
+        # vs the 2013 snapshot break the ranker's decay math). Matches showcase.
+        return generate_cards(snap, surface_count=2, include_weather=True,
+                              apply_feedback=False), "replay"
 
     # showcase: assemble the full 12-archetype catalog (one card each) by running
     # the real engine on the demo snapshot (10) + the peak-heavy companion (#3, #6).
